@@ -1,0 +1,422 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="fr" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GéoDash — Analyse Géospatiale</title>
+
+  <!--
+    Script anti-flash : lit localStorage AVANT le premier rendu.
+    Placé en premier dans <head> pour éviter un flash blanc → noir.
+  -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('gd-theme');
+        if (t === 'dark' || t === 'light') {
+          document.documentElement.setAttribute('data-theme', t);
+        }
+      } catch (e) {}
+    })();
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{% static 'dashboard/css/leaflet.min.css' %}">
+  <script src="{% static 'dashboard/js/leaflet.min.js' %}"></script>
+  <script src="{% static 'dashboard/js/chart.min.js' %}"></script>
+  <link rel="stylesheet" href="{% static 'dashboard/css/dashboard.css' %}">
+</head>
+<body>
+
+<!-- ── SPRITE SVG ──────────────────────────────────────── -->
+<svg style="display:none" aria-hidden="true">
+  <symbol id="i-road" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 2v20M8 4l4-2 4 2M8 20l4 2 4-2M2 8h4M18 8h4M2 16h4M18 16h4"/>
+  </symbol>
+  <symbol id="i-flood" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 2C9.5 5.5 7 7.5 7 11a5 5 0 0 0 10 0c0-3.5-2.5-5.5-5-9z"/>
+    <path d="M3 17c1.5-2.5 3-2.5 4.5 0s3 2.5 4.5 0 3-2.5 4.5 0 3 2.5 4.5 0"/>
+  </symbol>
+  <symbol id="i-leaf" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10z"/>
+    <path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/>
+  </symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+    <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+  </symbol>
+  <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="20 6 9 17 4 12"/>
+  </symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+    <polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>
+  </symbol>
+  <symbol id="i-map" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/>
+    <line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/>
+  </symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+    <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+  </symbol>
+  <symbol id="i-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+  </symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="3"/>
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+  </symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+    <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+  </symbol>
+  <!-- Icônes thème : soleil + lune -->
+  <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="5"/>
+    <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+    <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+  </symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+  </symbol>
+</svg>
+
+<!-- ── HEADER ──────────────────────────────────────────── -->
+<header class="hdr">
+  <a class="logo" href="/">
+    <div class="logo-badge">GD</div>
+    <div>
+      <div class="logo-name">GéoDash</div>
+      <div class="logo-sub">Analyse Géospatiale</div>
+    </div>
+  </a>
+
+  <div class="hdr-title">
+    <span class="hdr-title-main">
+      {% if current_zone %}{{ current_zone.name }}{% else %}Toutes les zones{% endif %}
+    </span>
+    <span class="hdr-title-sub">
+      {% if current_zone %}{{ current_zone.code }}{% else %}Vue globale{% endif %}
+    </span>
+  </div>
+
+  <div class="zone-wrap">
+    <label>Zone</label>
+    <select class="zone-select" id="zoneSelect">
+      <option value="">— Toutes les zones —</option>
+      {% for zone in zones %}
+      <option value="{{ zone.code }}" {% if selected_zone == zone.code %}selected{% endif %}>
+        {{ zone.name }}
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="hdr-right">
+    <div class="status-live">
+      <div class="live-dot"></div>EN LIGNE
+    </div>
+    <div class="hdr-sep"></div>
+    <div class="last-upd">MAJ <span id="lastUpd">{{ last_update|date:"d/m H:i" }}</span></div>
+    <div class="hdr-sep"></div>
+
+    <!-- Bouton toggle thème clair / sombre -->
+    <button class="theme-toggle" id="themeToggle" title="Changer le thème" aria-label="Changer le thème">
+      <svg class="th-sun"  width="15" height="15"><use href="#i-sun"/></svg>
+      <svg class="th-moon" width="15" height="15"><use href="#i-moon"/></svg>
+    </button>
+
+    <div class="hdr-sep"></div>
+    <div class="alert-pill {% if unread_alerts > 0 %}hot{% else %}ok{% endif %}" id="alertPill">
+      {% if unread_alerts > 0 %}
+        <svg width="11" height="11"><use href="#i-alert"/></svg>
+        {{ unread_alerts }} ALERTE{% if unread_alerts > 1 %}S{% endif %}
+      {% else %}
+        <svg width="11" height="11"><use href="#i-check"/></svg> RAS
+      {% endif %}
+    </div>
+  </div>
+</header>
+
+<!-- ── LAYOUT ──────────────────────────────────────────── -->
+<div class="layout">
+
+  <!-- NAV GAUCHE -->
+  <nav class="nav-left">
+    <div class="nav-section-label">Navigation</div>
+
+    <div class="nav-item active" data-set-layer="all">
+      <svg><use href="#i-grid"/></svg>
+      <span class="nav-item-label">Dashboard</span>
+    </div>
+    <div class="nav-item" data-set-layer="roads">
+      <svg><use href="#i-road"/></svg>
+      <span class="nav-item-label">Routes</span>
+    </div>
+    <div class="nav-item" data-set-layer="floods">
+      <svg><use href="#i-flood"/></svg>
+      <span class="nav-item-label">Inondations</span>
+    </div>
+    <div class="nav-item" data-set-layer="vegetation">
+      <svg><use href="#i-leaf"/></svg>
+      <span class="nav-item-label">Végétation</span>
+    </div>
+
+    <div class="nav-spacer"></div>
+    <div class="nav-divider"></div>
+    <div class="nav-section-label">Système</div>
+
+    <div class="nav-item">
+      <svg><use href="#i-bell"/></svg>
+      <span class="nav-item-label">Alertes</span>
+      {% if unread_alerts > 0 %}
+      <span class="nav-badge">{{ unread_alerts }}</span>
+      {% endif %}
+    </div>
+    <div class="nav-item">
+      <svg><use href="#i-settings"/></svg>
+      <span class="nav-item-label">Paramètres</span>
+    </div>
+  </nav>
+
+  <!-- CARTE -->
+  <div class="map-area">
+    <div class="map-toolbar">
+      <button class="mb active" data-set-layer="all">
+        <svg width="12" height="12"><use href="#i-map"/></svg> Tout
+      </button>
+      <button class="mb" data-set-layer="roads">
+        <svg width="12" height="12"><use href="#i-road"/></svg> Routes
+      </button>
+      <button class="mb" data-set-layer="floods">
+        <svg width="12" height="12"><use href="#i-flood"/></svg> Inondations
+      </button>
+      <button class="mb" data-set-layer="vegetation">
+        <svg width="12" height="12"><use href="#i-leaf"/></svg> Végétation
+      </button>
+    </div>
+
+    <div class="map-legend">
+      <div class="ml-ttl">Légende</div>
+      <div class="ml-row"><div class="ml-line" style="background:#28b857"></div>Route — Bon</div>
+      <div class="ml-row"><div class="ml-line" style="background:#e67e22"></div>Route — Dégradé</div>
+      <div class="ml-row"><div class="ml-line" style="background:#f43f5e"></div>Route — Critique</div>
+      <div class="ml-row"><div class="ml-line" style="background:#94a3b8"></div>Route — Fermé</div>
+      <div class="ml-sep"></div>
+      <div class="ml-row"><div class="ml-poly" style="background:#26c6da"></div>Zone inondation</div>
+      <div class="ml-row"><div class="ml-poly" style="background:#3ecf6e"></div>Végétation</div>
+    </div>
+
+    <div class="map-overlay" id="mapOverlay">
+      <div class="spinner"></div>
+      <div class="map-overlay-label">Chargement de la carte…</div>
+    </div>
+    <div id="map"></div>
+  </div>
+
+  <!-- PANEL DROIT -->
+  <aside class="panel-right">
+
+    <div class="panel-hdr">
+      <div class="panel-hdr-title">Indicateurs clés</div>
+    </div>
+
+    <!--
+      panel-mid : conteneur scrollable contenant KPIs + Couches.
+      Cela garantit que "Couches carte" est toujours accessible
+      même si les KPIs dépassent la hauteur disponible.
+    -->
+    <div class="panel-mid">
+
+      <!-- KPI Cards -->
+      <div class="kpi-grid">
+
+        <div class="kpi-card" data-layer="roads">
+          <div class="kpi-top">
+            <div class="kpi-label">Santé routière</div>
+            <div class="kpi-icon road"><svg><use href="#i-road"/></svg></div>
+          </div>
+          <div class="kpi-value {% if avg_road_score >= 70 %}good{% elif avg_road_score >= 40 %}warn{% else %}danger{% endif %}">
+            {{ avg_road_score }}<span class="unit">/100</span>
+          </div>
+          <div class="kpi-sub">{{ critical_roads }} segment{% if critical_roads != 1 %}s{% endif %} en alerte</div>
+          <div class="kpi-bar">
+            <div class="kpi-bar-fill" style="width:{{ road_health_pct|default:0 }}%"></div>
+          </div>
+        </div>
+
+        <div class="kpi-card" data-layer="floods">
+          <div class="kpi-top">
+            <div class="kpi-label">Risque inondation</div>
+            <div class="kpi-icon flood"><svg><use href="#i-flood"/></svg></div>
+          </div>
+          <div class="kpi-value {% if avg_flood_risk <= 30 %}good{% elif avg_flood_risk <= 60 %}warn{% else %}danger{% endif %}">
+            {{ avg_flood_risk }}<span class="unit">/100</span>
+          </div>
+          <div class="kpi-sub">{{ critical_floods }} zone{% if critical_floods != 1 %}s{% endif %} à risque élevé</div>
+          <div class="kpi-bar">
+            <div class="kpi-bar-fill flood" style="width:{{ avg_flood_risk|default:0 }}%"></div>
+          </div>
+        </div>
+
+        <div class="kpi-card" data-layer="vegetation">
+          <div class="kpi-top">
+            <div class="kpi-label">NDVI moyen</div>
+            <div class="kpi-icon veg"><svg><use href="#i-leaf"/></svg></div>
+          </div>
+          <div class="kpi-value" style="color:#26c6da">{{ avg_ndvi }}</div>
+          <div class="kpi-sub">{{ dense_veg }} zone{% if dense_veg != 1 %}s{% endif %} dense{% if dense_veg != 1 %}s{% endif %}</div>
+          <div class="kpi-bar">
+            {% widthratio avg_ndvi 1 100 as ndvi_pct %}
+            <div class="kpi-bar-fill veg" style="width:{{ ndvi_pct|default:0 }}%"></div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Couches carte — TOUJOURS visible grâce au panel-mid scrollable -->
+      <div class="layers-sec">
+        <div class="layers-title">
+          <svg width="11" height="11"><use href="#i-layers"/></svg> Couches carte
+        </div>
+        <div class="layer-row" data-toggle-layer="roads">
+          <input type="checkbox" checked>
+          <div class="l-indicator" style="background:#5b8dee"></div>
+          <span class="l-name">Routes</span>
+          <span class="l-count">{{ total_roads }}</span>
+        </div>
+        <div class="layer-row" data-toggle-layer="floods">
+          <input type="checkbox" checked>
+          <div class="l-indicator" style="background:#26c6da"></div>
+          <span class="l-name">Risques inondation</span>
+          <span class="l-count">{{ critical_floods }}</span>
+        </div>
+        <div class="layer-row" data-toggle-layer="vegetation">
+          <input type="checkbox" checked>
+          <div class="l-indicator" style="background:#3ecf6e"></div>
+          <span class="l-name">Végétation</span>
+          <span class="l-count">{{ dense_veg }}</span>
+        </div>
+      </div>
+
+    </div>{# /panel-mid #}
+
+    <!-- Alertes — section fixe en bas du panel -->
+    <div class="alerts-sec">
+      <div class="alerts-hdr">
+        <div class="alerts-title">
+          <svg width="11" height="11"><use href="#i-bell"/></svg> Alertes actives
+        </div>
+        <span id="alertCount" class="alerts-count {% if not unread_alerts %}zero{% endif %}">
+          {{ unread_alerts }}
+        </span>
+      </div>
+      <div class="alerts-scroll">
+        {% if recent_alerts %}
+          {% for a in recent_alerts %}
+          <div class="a-item {{ a.severity }}"
+            data-lat="{{ a.lat|default:0 }}"
+            data-lng="{{ a.lng|default:0 }}"
+            data-focus-alert>
+            <div class="a-title">{{ a.title }}</div>
+            <div class="a-msg">{{ a.message|truncatechars:80 }}</div>
+            <div class="a-foot">
+              <span class="a-tag tag-{{ a.category }}">{{ a.get_category_display }}</span>
+              <span class="a-time">{{ a.created_at|timesince }}</span>
+            </div>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div class="a-empty">
+            <svg width="28" height="28"><use href="#i-check"/></svg>
+            Aucune alerte active
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- GRAPHIQUES -->
+  <div class="charts-bar">
+
+    <div class="chart-pane">
+      <div class="chart-ttl">
+        <svg width="10" height="10"><use href="#i-road"/></svg> État des routes
+      </div>
+      <div class="chart-body"><canvas id="cRoad"></canvas></div>
+    </div>
+
+    <div class="chart-pane">
+      <div class="chart-ttl">
+        <svg width="10" height="10"><use href="#i-flood"/></svg> Risques inondation
+      </div>
+      <div class="chart-body"><canvas id="cFlood"></canvas></div>
+    </div>
+
+    <div class="chart-pane score-pane">
+      <div class="chart-ttl">
+        <svg width="10" height="10"><use href="#i-pulse"/></svg> Score global
+      </div>
+      <div class="score-inner">
+        <div class="gauge-wrap">
+          <canvas id="cGauge"></canvas>
+          <div class="gauge-ctr">
+            <div class="gauge-num {% if avg_road_score >= 70 %}g{% elif avg_road_score >= 40 %}w{% else %}b{% endif %}" id="gaugeNum">
+              {{ avg_road_score }}
+            </div>
+            <div class="gauge-den">/100</div>
+          </div>
+        </div>
+        <div class="score-meta">
+          <div class="sm-row"><span class="sm-key">Rapport</span>{{ last_update|date:"d/m/Y" }}</div>
+          <div class="sm-row"><span class="sm-key">Heure</span>{{ last_update|date:"H:i" }}</div>
+          <div class="sm-row"><span class="sm-key">Zones</span>{{ zones|length }}</div>
+          <div class="sm-cnt">{{ total_roads }} routes analysées</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</div>{# /layout #}
+
+<div id="toasts"></div>
+
+<!-- Injection des données Django → JS via json_script (safe, sans alerte IDE) -->
+{{ map_data_json|default:"{}"|json_script:"gd-map-data" }}
+{{ chart_routes_json|default:"{}"|json_script:"gd-chart-routes" }}
+{{ chart_floods_json|default:"{}"|json_script:"gd-chart-floods" }}
+{{ avg_score_json|json_script:"gd-avg-score" }}
+{{ center_lat_json|json_script:"gd-center-lat" }}
+{{ center_lng_json|json_script:"gd-center-lng" }}
+
+<script src="{% static 'dashboard/js/dashboard.js' %}"></script>
+<script>
+  function readJson(id, fallback) {
+    var el = document.getElementById(id);
+    if (!el) return fallback;
+    try { return JSON.parse(el.textContent); } catch (e) { return fallback; }
+  }
+
+  var MAP_DATA     = readJson('gd-map-data',     {});
+  var CHART_ROUTES = readJson('gd-chart-routes', {});
+  var CHART_FLOODS = readJson('gd-chart-floods', {});
+  var AVG_SCORE    = readJson('gd-avg-score',      0);
+  var CENTER_LAT   = readJson('gd-center-lat',     0);
+  var CENTER_LNG   = readJson('gd-center-lng',     0);
+
+  document.addEventListener('DOMContentLoaded', function () {
+    initEventListeners();
+    initMap(CENTER_LAT, CENTER_LNG, MAP_DATA);
+    initCharts(CHART_ROUTES, CHART_FLOODS, AVG_SCORE);
+    setInterval(refreshAlerts, 60000);
+  });
+</script>
+</body>
+</html>

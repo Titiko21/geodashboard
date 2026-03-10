@@ -1,0 +1,27 @@
+# ============================================================
+#  Fichiers sensibles — NE JAMAIS commit sur Git
+# ============================================================
+.env
+*.json
+db.sqlite3
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Django
+staticfiles/
+media/
