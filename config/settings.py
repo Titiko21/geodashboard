@@ -79,8 +79,109 @@ STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-#  GOOGLE EARTH ENGINE
+# ── Google Earth Engine ───────────────────────────────────────────────────────
 
 GEE_SERVICE_ACCOUNT = os.environ.get('GEE_SERVICE_ACCOUNT', '')
 GEE_KEY_FILE        = os.environ.get('GEE_KEY_FILE', '')
 GEE_PROJECT         = os.environ.get('GEE_PROJECT', '')
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+# En développement  : tout s'affiche dans la console, niveau DEBUG.
+# En production     : les erreurs sont écrites dans logs/geodash.log,
+#                     les warnings et erreurs Django dans logs/django.log.
+# Le dossier logs/  est créé automatiquement s'il n'existe pas.
+
+LOGS_DIR = BASE_DIR / 'logs'
+LOGS_DIR.mkdir(exist_ok=True)
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+
+    # ── Formateurs ──
+    'formatters': {
+        'verbose': {
+            'format': '{asctime} [{levelname}] {name} — {message}',
+            'style': '{',
+            'datefmt': '%Y-%m-%d %H:%M:%S',
+        },
+        'simple': {
+            'format': '[{levelname}] {message}',
+            'style': '{',
+        },
+    },
+
+    # ── Filtres ──
+    'filters': {
+        'require_debug_true': {
+            '()': 'django.utils.log.RequireDebugTrue',
+        },
+        'require_debug_false': {
+            '()': 'django.utils.log.RequireDebugFalse',
+        },
+    },
+
+    # ── Handlers ──
+    'handlers': {
+        # Console — actif uniquement en développement (DEBUG=True)
+        'console': {
+            'level': 'DEBUG',
+            'filters': ['require_debug_true'],
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
+        },
+
+        # Fichier général Django — erreurs en production
+        'django_file': {
+            'level': 'WARNING',
+            'filters': ['require_debug_false'],
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': LOGS_DIR / 'django.log',
+            'maxBytes': 5 * 1024 * 1024,   # 5 MB par fichier
+            'backupCount': 3,               # garde les 3 derniers fichiers
+            'formatter': 'verbose',
+            'encoding': 'utf-8',
+        },
+
+        # Fichier applicatif GéoDash — toujours actif (dev + prod)
+        'geodash_file': {
+            'level': 'INFO',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': LOGS_DIR / 'geodash.log',
+            'maxBytes': 10 * 1024 * 1024,  # 10 MB par fichier
+            'backupCount': 5,
+            'formatter': 'verbose',
+            'encoding': 'utf-8',
+        },
+    },
+
+    # ── Loggers ──
+    'loggers': {
+        # Logger Django interne
+        'django': {
+            'handlers': ['console', 'django_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+
+        # Requêtes HTTP Django (trop verbeux en prod, on les filtre)
+        'django.request': {
+            'handlers': ['django_file'],
+            'level': 'ERROR',
+            'propagate': False,
+        },
+
+        # Toute l'application dashboard (views, admin, commandes)
+        'dashboard': {
+            'handlers': ['console', 'geodash_file'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+    },
+
+    # Logger racine — capture tout ce qui n'est pas géré ailleurs
+    'root': {
+        'handlers': ['console', 'geodash_file'],
+        'level': 'WARNING',
+    },
+}

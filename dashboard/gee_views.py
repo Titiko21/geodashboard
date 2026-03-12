@@ -1,13 +1,3 @@
-"""
-gee_views.py — Vues API pour l'intégration GEE
-================================================
-Ces vues s'ajoutent au fichier urls.py existant.
-Elles permettent de :
-  - Tester la connexion GEE depuis le dashboard
-  - Déclencher une synchronisation via le navigateur
-  - Voir le statut de la dernière synchronisation
-"""
-
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET, require_POST
 from django.utils import timezone

@@ -1003,7 +1003,7 @@ function toast(msg, type) {
    {
      theme     : 'light'|'dark',
      density   : 'compact'|'normal'|'comfortable',
-     tileStyle : 'dark'|'light'|'osm'|'topo',
+     tileStyle : 'dark'|'light'|'osm'|'topo'|'satellite',
      zoomDefault: 9,
      showScale : true,
      showLegend: true,
@@ -1162,7 +1162,6 @@ function applySettings() {
   if (legend) legend.style.display = s.showLegend ? '' : 'none';
 
   /* Échelle Leaflet */
-  /* (le contrôle est déjà sur la carte, on le masque/affiche via CSS) */
   var scaleEl = document.querySelector('.leaflet-control-scale');
   if (scaleEl) scaleEl.style.display = s.showScale ? '' : 'none';
 
@@ -1174,37 +1173,54 @@ function applySettings() {
 }
 
 /* ══════════════════════════════════════════════════════════
-   FONDS DE CARTE — URLs corrigées
+   FONDS DE CARTE
    ─────────────────────────────────────────────────────────
-   {r} SUPPRIMÉ de toutes les URLs CartoDB.
-   {r} était le placeholder rétina Leaflet (@2x / vide).
-   Certains sous-domaines CartoDB n'ont pas les tuiles @2x
-   → 404 → zones grises. Fix : URL fixe sans {r}.
+   maxNativeZoom : zoom max auquel le fournisseur a de VRAIES
+   tuiles. Au-delà, Leaflet upscale proprement au lieu de
+   griser. Sans ce paramètre, on dépasse la résolution réelle
+   et les tuiles deviennent floues ou absentes.
+
+   detectRetina : sur les écrans haute densité (DPR ≥ 2),
+   Leaflet demande automatiquement les tuiles ×2 quand elles
+   existent — rendu plus net sans rien changer côté code.
 ══════════════════════════════════════════════════════════ */
 var TILE_CONFIGS = {
   dark: {
-    url:        'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-    subdomains: 'abcd',
-    label:      'CartoDB Sombre',
-    maxZoom:    19,
+    url:             'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+    subdomains:      'abcd',
+    label:           'CartoDB Sombre',
+    maxNativeZoom:   18,   /* CartoDB ne dépasse pas z18 en natif */
+    maxZoom:         22,
   },
   light: {
-    url:        'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
-    subdomains: 'abcd',
-    label:      'CartoDB Clair',
-    maxZoom:    19,
+    url:             'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+    subdomains:      'abcd',
+    label:           'CartoDB Clair',
+    maxNativeZoom:   18,
+    maxZoom:         22,
   },
   osm: {
-    url:        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-    subdomains: '',
-    label:      'OpenStreetMap',
-    maxZoom:    19,
+    url:             'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    subdomains:      '',
+    label:           'OpenStreetMap',
+    maxNativeZoom:   19,
+    maxZoom:         22,
   },
   topo: {
-    url:        'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
-    subdomains: 'abc',
-    label:      'Topographique',
-    maxZoom:    17,
+    url:             'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+    subdomains:      'abc',
+    label:           'Topographique',
+    maxNativeZoom:   17,   /* OpenTopoMap s'arrête à z17 */
+    maxZoom:         17,
+  },
+  /* Esri World Imagery — satellite haute résolution, gratuit, sans clé API.
+     Idéal pour visualiser le terrain réel (végétation, routes, relief). */
+  satellite: {
+    url:             'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    subdomains:      '',
+    label:           'Satellite',
+    maxNativeZoom:   18,
+    maxZoom:         22,
   },
 };
 
@@ -1220,11 +1236,13 @@ function _buildTileLayer(style) {
   var cfg = TILE_CONFIGS[style] || TILE_CONFIGS.dark;
 
   var opts = {
-    maxZoom:          cfg.maxZoom || 19,
-    keepBuffer:       2,          /* était 4 — trop de requêtes simultanées */
+    maxNativeZoom:    cfg.maxNativeZoom,
+    maxZoom:          cfg.maxZoom,
+    keepBuffer:       2,           /* était 4 — trop de requêtes simultanées */
     crossOrigin:      '',
     updateWhenIdle:   false,
     updateWhenZooming: false,
+    detectRetina:     true,        /* tuiles ×2 sur écrans haute densité */
     errorTileUrl:     _EMPTY_TILE, /* tuile transparente au lieu du gris Leaflet */
   };
   if (cfg.subdomains) opts.subdomains = cfg.subdomains;
@@ -1237,15 +1255,14 @@ function _buildTileLayer(style) {
      affiche la tuile transparente (errorTileUrl).
   ─────────────────────────────────────────────────────*/
   layer.on('tileerror', function (ev) {
-    var tile = ev.tile;
+    var tile    = ev.tile;
     var retries = parseInt(tile.dataset.gdRetry || '0', 10);
     if (retries < 3) {
       tile.dataset.gdRetry = retries + 1;
       setTimeout(function () {
-        /* Recharge la tuile avec un cache-bust minimal */
         var src = tile.src.split('?')[0];
         tile.src = src + '?_r=' + tile.dataset.gdRetry;
-      }, 400 * (retries + 1)); /* délai croissant : 400ms, 800ms, 1200ms */
+      }, 400 * (retries + 1));   /* délai croissant : 400ms, 800ms, 1200ms */
     }
     /* Si 3 tentatives épuisées → errorTileUrl s'affiche automatiquement */
   });
@@ -1447,6 +1464,8 @@ function initSettings() {
     opt.addEventListener('click', function () {
       document.querySelectorAll('.sd-tile-opt').forEach(function (o) { o.classList.remove('active'); });
       this.classList.add('active');
+      // Live-preview immédiat du fond de carte — pas besoin d'attendre "Enregistrer"
+      if (map && _mapReady) _applyTileStyle(this.dataset.tile);
     });
   });
 }

@@ -124,11 +124,9 @@
     </div>
 
     <!-- Sélecteur de zone — déclenche un reload via switchZone() dans dashboard.js -->
-    <!-- data-url passe l'URL Django résolue au JS pour éviter l'URL hardcodée -->
     <div class="zone-wrap">
         <label for="zoneSelect">Zone</label>
-        <select class="zone-select" id="zoneSelect"
-                data-url="{% url 'dashboard:index' %}">
+        <select class="zone-select" id="zoneSelect">
             <option value="">— Toutes les zones —</option>
             {% for zone in zones %}
             <option value="{{ zone.code }}" {% if zone_code == zone.code %}selected{% endif %}>
@@ -245,9 +243,8 @@
     </div>
 
     <!--
-        Panel droit — structure corrigée dans une session précédente.
-        panel-body(flex:1, overflow-y:auto) contient tout le contenu scrollable
-        au lieu d'avoir panel-mid + alerts-sec avec des max-height qui débordaient.
+        Panel droit — panel-body(flex:1, overflow-y:auto) contient tout le
+        contenu scrollable dans une seule zone de scroll propre.
     -->
     <aside class="panel-right" aria-label="Indicateurs et alertes">
         <div class="panel-hdr">
@@ -542,11 +539,6 @@
                         <div class="sd-row-lbl-main">Thème</div>
                         <div class="sd-row-lbl-hint">Clair ou sombre — aussi accessible depuis le header</div>
                     </div>
-                    <!--
-                        Classe themeBtns (et non densityBtns) pour bien séparer
-                        les deux groupes radio. initSettings() y attache un listener
-                        qui applique le thème immédiatement sans attendre la sauvegarde.
-                    -->
                     <div class="sd-radio-group themeBtns" style="justify-content:flex-end">
                         <button type="button" class="sd-radio-btn" data-val="light">Clair</button>
                         <button type="button" class="sd-radio-btn" data-val="dark">Sombre</button>
@@ -619,7 +611,12 @@
                 <div class="sd-section-title">Fond de carte</div>
             </div>
 
-            <!-- Grille de sélection du fond de carte — 4 options fiables (CartoDB {r} retiré dans dashboard.js) -->
+            <!--
+                Grille de sélection — 5 options.
+                La 5e (Satellite) pointe sur TILE_CONFIGS.satellite dans dashboard.js :
+                Esri World Imagery, gratuit, sans clé API, résolution réelle.
+                Le live-preview s'applique immédiatement via _applyTileStyle() au clic.
+            -->
             <div class="sd-tile-grid">
                 <div class="sd-tile-opt active" data-tile="dark">
                     <div class="sd-tile-preview dark-tiles"></div>
@@ -636,6 +633,10 @@
                 <div class="sd-tile-opt" data-tile="topo">
                     <div class="sd-tile-preview topo-tiles"></div>
                     <div class="sd-tile-label">Topographique</div>
+                </div>
+                <div class="sd-tile-opt" data-tile="satellite">
+                    <div class="sd-tile-preview satellite-tiles"></div>
+                    <div class="sd-tile-label">Satellite</div>
                 </div>
             </div>
 
