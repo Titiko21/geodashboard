@@ -79,9 +79,8 @@ STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# ============================================================
 #  GOOGLE EARTH ENGINE
-# ============================================================
+
 GEE_SERVICE_ACCOUNT = os.environ.get('GEE_SERVICE_ACCOUNT', '')
 GEE_KEY_FILE        = os.environ.get('GEE_KEY_FILE', '')
 GEE_PROJECT         = os.environ.get('GEE_PROJECT', '')

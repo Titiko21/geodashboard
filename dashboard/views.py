@@ -1,370 +1,350 @@
+"""
+GéoDash — views.py
+Synchronisé avec models.py :
+  RoadSegment / FloodRisk / VegetationDensity / Alert
+"""
 import json
-import math
-from decimal import Decimal
-
-from django.shortcuts import render, get_object_or_404
-from django.http import JsonResponse
-from django.views.decorators.http import require_GET, require_POST
-from django.db.models import Avg
-from django.utils import timezone
-from django.core.serializers.json import DjangoJSONEncoder
+import logging
+from django.shortcuts  import render, get_object_or_404
+from django.http       import JsonResponse
+from django.views.decorators.http import require_GET
+from django.db.models  import Avg
+from django.utils      import timezone
 
 from .models import Zone, RoadSegment, FloodRisk, VegetationDensity, Alert
-from .constants import ROAD_COLORS, FLOOD_COLORS, VEG_COLORS
+
+logger = logging.getLogger("geodash")
 
 
-# ─────────────────────────────────────────────────────────────
-#  UTILITAIRES
-# ─────────────────────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────────────
 
-class SafeEncoder(DjangoJSONEncoder):
-    """Decimal → float, neutralise NaN/Infinity."""
-    def default(self, obj):
-        if isinstance(obj, Decimal):
-            v = float(obj)
-            return None if (math.isnan(v) or math.isinf(v)) else v
-        return super().default(obj)
-
-
-def safe_float(val, default=0.0):
-    """Float sûr : jamais NaN, jamais None."""
+def _js_num(value, default=0):
     try:
-        f = float(val)
-        return default if math.isnan(f) or math.isinf(f) else round(f, 4)
+        return float(value) if value is not None else float(default)
     except (TypeError, ValueError):
-        return default
+        return float(default)
 
+def _road_color(score):
+    if score is None: return "#94a3b8"
+    if score >= 70:   return "#28b857"
+    if score >= 40:   return "#e67e22"
+    if score >= 10:   return "#f43f5e"
+    return "#94a3b8"
 
-def to_geojson(obj):
-    """Normalise un champ geojson (dict ou string JSON)."""
-    if obj is None:
+def _geojson(obj):
+    """Retourne le geojson depuis un JSONField (dict ou string)."""
+    g = getattr(obj, 'geojson', None)
+    if not g:
         return None
-    if isinstance(obj, dict):
-        return obj
+    if isinstance(g, dict):
+        return g
     try:
-        return json.loads(obj)
-    except (json.JSONDecodeError, TypeError):
+        return json.loads(g)
+    except Exception:
         return None
 
-
-def js_num(val):
+def _zone_bbox(zone):
     """
-    Sérialise un nombre pour injection JS via json_script.
-    json.dumps garantit le point décimal — évite le bug locale fr (0,0).
+    Zone n'a pas de bbox → on calcule un bbox approximatif
+    de ±0.25° autour du centre.
     """
-    return json.dumps(float(val), cls=SafeEncoder)
-
-
-# ─────────────────────────────────────────────────────────────
-#  KPIs
-# ─────────────────────────────────────────────────────────────
-
-def _get_road_kpis(road_qs):
-    avg_score = road_qs.aggregate(avg=Avg('condition_score'))['avg'] or 0
+    if not zone:
+        return {"west": -4.25, "south": 5.10, "east": -3.75, "north": 5.60}
     return {
-        'total_roads':     road_qs.count(),
-        'critical_roads':  road_qs.filter(status__in=['critique', 'ferme']).count(),
-        'avg_road_score':  round(safe_float(avg_score), 1),
-        'road_health_pct': int(safe_float(avg_score)),
-        'road_dist': {
-            'bon':      road_qs.filter(status='bon').count(),
-            'degrade':  road_qs.filter(status='degrade').count(),
-            'critique': road_qs.filter(status='critique').count(),
-            'ferme':    road_qs.filter(status='ferme').count(),
-        },
+        "west":  zone.lng_center - 0.25,
+        "south": zone.lat_center - 0.25,
+        "east":  zone.lng_center + 0.25,
+        "north": zone.lat_center + 0.25,
     }
 
-
-def _get_flood_kpis(flood_qs):
-    avg_risk = flood_qs.aggregate(avg=Avg('risk_score'))['avg'] or 0
-    return {
-        'critical_floods': flood_qs.filter(risk_level__in=['eleve', 'critique']).count(),
-        'avg_flood_risk':  round(safe_float(avg_risk), 1),
-        'flood_dist': {
-            'faible':   flood_qs.filter(risk_level='faible').count(),
-            'modere':   flood_qs.filter(risk_level='modere').count(),
-            'eleve':    flood_qs.filter(risk_level='eleve').count(),
-            'critique': flood_qs.filter(risk_level='critique').count(),
-        },
-    }
+def _gee_available():
+    try:
+        from .gee_integration import _gee_initialized, init_gee
+        if not _gee_initialized:
+            init_gee()
+        return True
+    except Exception:
+        return False
 
 
-def _get_veg_kpis(veg_qs):
-    avg_ndvi = veg_qs.aggregate(avg=Avg('ndvi_value'))['avg'] or 0
-    return {
-        'avg_ndvi':  round(safe_float(avg_ndvi), 3),
-        'dense_veg': veg_qs.filter(density_class__in=['dense', 'very_dense']).count(),
-    }
-
-
-def _build_map_data(road_qs, flood_qs, veg_qs):
-    return {
-        'routes': [
-            {
-                'name':            r.name,
-                'status':          r.status,
-                'status_label':    r.get_status_display(),
-                'condition_score': safe_float(r.condition_score),
-                'surface_type':    r.surface_type or '',
-                'notes':           r.notes or '',
-                'color':           ROAD_COLORS.get(r.status, '#6b7280'),
-                'geojson':         to_geojson(r.geojson),
-            }
-            for r in road_qs if r.geojson
-        ],
-        'floods': [
-            {
-                'name':        f.name,
-                'risk_level':  f.risk_level,
-                'risk_label':  f.get_risk_level_display(),
-                'risk_score':  safe_float(f.risk_score),
-                'area_km2':    safe_float(f.area_km2),
-                'rainfall_mm': safe_float(f.rainfall_mm),
-                'color':       FLOOD_COLORS.get(f.risk_level, '#22d3ee'),
-                'geojson':     to_geojson(f.geojson),
-            }
-            for f in flood_qs if f.geojson
-        ],
-        'vegetation': [
-            {
-                'name':             v.name,
-                'ndvi_value':       safe_float(v.ndvi_value),
-                'coverage_percent': safe_float(v.coverage_percent),
-                'density_class':    v.density_class or '',
-                'density_label':    v.get_density_class_display(),
-                'change':           safe_float(v.change_vs_previous),
-                'color':            VEG_COLORS.get(v.density_class, '#4ade80'),
-                'geojson':          to_geojson(v.geojson),
-            }
-            for v in veg_qs if v.geojson
-        ],
-    }
-
-
-# ─────────────────────────────────────────────────────────────
-#  VUE PRINCIPALE
-# ─────────────────────────────────────────────────────────────
+# ── Vue principale ─────────────────────────────────────────────────────────────
 
 def dashboard(request):
-    zones              = Zone.objects.all()
-    selected_zone_code = request.GET.get('zone', '')
+    zone_code = request.GET.get("zone", "")
+    zones     = Zone.objects.all().order_by("name")
 
-    current_zone = None
-    if selected_zone_code:
-        try:
-            current_zone = Zone.objects.get(code=selected_zone_code)
-        except Zone.DoesNotExist:
-            pass
+    # Pas de fallback sur zones.first() : zone_code vide = vraiment toutes les zones.
+    # Si le code est invalide, selected_zone reste None et on affiche tout.
+    selected_zone = None
+    if zone_code:
+        selected_zone = Zone.objects.filter(code=zone_code).first()
 
-    road_qs  = RoadSegment.objects.select_related('zone').all()
-    flood_qs = FloodRisk.objects.select_related('zone').all()
-    veg_qs   = VegetationDensity.objects.select_related('zone').all()
+    # Querysets filtrés ou globaux selon la sélection
+    roads_qs  = RoadSegment.objects.filter(zone=selected_zone)       if selected_zone else RoadSegment.objects.all()
+    floods_qs = FloodRisk.objects.filter(zone=selected_zone)         if selected_zone else FloodRisk.objects.all()
+    veg_qs    = VegetationDensity.objects.filter(zone=selected_zone)  if selected_zone else VegetationDensity.objects.all()
 
-    if current_zone:
-        road_qs  = road_qs.filter(zone=current_zone)
-        flood_qs = flood_qs.filter(zone=current_zone)
-        veg_qs   = veg_qs.filter(zone=current_zone)
-
-    road_kpis  = _get_road_kpis(road_qs)
-    flood_kpis = _get_flood_kpis(flood_qs)
-    veg_kpis   = _get_veg_kpis(veg_qs)
-
-    alert_qs      = Alert.objects.filter(is_read=False)
-    if current_zone:
-        alert_qs  = alert_qs.filter(zone=current_zone)
-    unread_alerts = alert_qs.count()
-    recent_alerts = alert_qs.order_by('-created_at')[:10]
-
-    map_data = _build_map_data(road_qs, flood_qs, veg_qs)
-
-    rd = road_kpis['road_dist']
-    chart_routes = {
-        'labels': ['Bon', 'Dégradé', 'Critique', 'Fermé'],
-        'values': [rd['bon'], rd['degrade'], rd['critique'], rd['ferme']],
-        'colors': ['#22c55e', '#f97316', '#ef4444', '#6b7280'],
+    # Données carte (JSON)
+    map_data = {
+        "routes": [
+            {
+                "id":              r.id,
+                "name":            r.name,
+                "condition_score": r.condition_score,
+                "status":          r.status,
+                "status_label":    r.get_status_display(),
+                "surface_type":    r.surface_type,
+                "color":           _road_color(r.condition_score),
+                "notes":           r.notes,
+                "geojson":         _geojson(r),
+            }
+            for r in roads_qs
+        ],
+        "floods": [
+            {
+                "id":          f.id,
+                "name":        f.name,
+                "risk_level":  f.risk_level,
+                "risk_label":  f.get_risk_level_display(),
+                "risk_score":  f.risk_score,
+                "area_km2":    _js_num(f.area_km2),
+                "rainfall_mm": _js_num(f.rainfall_mm),
+                "color": {
+                    "faible": "#22d3ee", "modere": "#3b82f6",
+                    "eleve": "#f97316", "critique": "#dc2626"
+                }.get(f.risk_level, "#3b82f6"),
+                "geojson": _geojson(f),
+            }
+            for f in floods_qs
+        ],
+        "vegetation": [
+            {
+                "id":               v.id,
+                "name":             v.name,
+                "ndvi_value":       _js_num(v.ndvi_value),
+                "coverage_percent": _js_num(v.coverage_percent),
+                "density_class":    v.density_class,
+                "density_label":    v.get_density_class_display(),
+                "geojson":          _geojson(v),
+            }
+            for v in veg_qs
+        ],
     }
-    fd = flood_kpis['flood_dist']
+
+    # KPI
+    avg_val   = roads_qs.aggregate(avg=Avg("condition_score"))["avg"] or 0
+    avg_score = round(float(avg_val), 1)
+
+    center_lat = _js_num(selected_zone.lat_center if selected_zone else 5.35)
+    center_lng = _js_num(selected_zone.lng_center if selected_zone else -4.00)
+
+    # Alertes  (is_read au lieu de resolved)
+    alerts = Alert.objects.filter(
+        zone=selected_zone, is_read=False
+    ).order_by("-created_at")[:20] if selected_zone else \
+             Alert.objects.filter(is_read=False).order_by("-created_at")[:20]
+
+    unread = Alert.objects.filter(is_read=False).count()
+
+    # Graphiques
+    dist = {"0-25": 0, "26-50": 0, "51-75": 0, "76-100": 0}
+    for r in roads_qs:
+        sc = r.condition_score or 0
+        if sc <= 25:   dist["0-25"]   += 1
+        elif sc <= 50: dist["26-50"]  += 1
+        elif sc <= 75: dist["51-75"]  += 1
+        else:          dist["76-100"] += 1
+
+    chart_routes = {"labels": list(dist.keys()), "data": list(dist.values())}
+
+    flood_lvl = {"faible": 0, "modere": 0, "eleve": 0, "critique": 0}
+    for f in floods_qs:
+        if f.risk_level in flood_lvl:
+            flood_lvl[f.risk_level] += 1
+
     chart_floods = {
-        'labels': ['Faible', 'Modéré', 'Élevé', 'Critique'],
-        'values': [fd['faible'], fd['modere'], fd['eleve'], fd['critique']],
-        'colors': ['#22d3ee', '#3b82f6', '#f97316', '#dc2626'],
+        "labels": ["Faible", "Modéré", "Élevé", "Critique"],
+        "data":   list(flood_lvl.values()),
     }
 
-    if current_zone:
-        center_lat = safe_float(current_zone.lat_center, 5.35)
-        center_lng = safe_float(current_zone.lng_center, -4.00)
-    elif zones.exists():
-        lats = [safe_float(z.lat_center) for z in zones if z.lat_center]
-        lngs = [safe_float(z.lng_center) for z in zones if z.lng_center]
-        center_lat = round(sum(lats) / len(lats), 4) if lats else 5.35
-        center_lng = round(sum(lngs) / len(lngs), 4) if lngs else -4.00
-    else:
-        center_lat, center_lng = 5.35, -4.00
+    # KPI routes
+    total_roads    = roads_qs.count()
+    critical_roads = roads_qs.filter(condition_score__lt=40).count()
+    road_health_pct = round(float(avg_score))   # avg_score est déjà /100
 
-    avg_score = road_kpis['avg_road_score']
+    # KPI inondations
+    total_floods    = floods_qs.count()
+    critical_floods = floods_qs.filter(risk_level__in=["eleve", "critique"]).count()
+    avg_flood_val   = floods_qs.aggregate(avg=Avg("risk_score"))["avg"] or 0
+    avg_flood_risk  = round(float(avg_flood_val))
+
+    # KPI végétation
+    total_veg  = veg_qs.count()
+    dense_veg  = veg_qs.filter(density_class__in=["dense", "very_dense"]).count()
+    avg_ndvi_v = veg_qs.aggregate(avg=Avg("ndvi_value"))["avg"] or 0
+    avg_ndvi   = round(float(avg_ndvi_v), 3)
 
     context = {
-        'zones':           zones,
-        'selected_zone':   selected_zone_code,
-        'current_zone':    current_zone,
-        'total_roads':     road_kpis['total_roads'],
-        'critical_roads':  road_kpis['critical_roads'],
-        'avg_road_score':  avg_score,
-        'road_health_pct': road_kpis['road_health_pct'],
-        'critical_floods': flood_kpis['critical_floods'],
-        'avg_flood_risk':  flood_kpis['avg_flood_risk'],
-        'avg_ndvi':        veg_kpis['avg_ndvi'],
-        'dense_veg':       veg_kpis['dense_veg'],
-        'unread_alerts':   unread_alerts,
-        'recent_alerts':   recent_alerts,
-        'last_update':     timezone.now(),
-        'center_lat':      center_lat,
-        'center_lng':      center_lng,
-        # Valeurs JS — toutes via json.dumps, jamais de locale fr
-        'map_data_json':     json.dumps(map_data,       cls=SafeEncoder, ensure_ascii=False),
-        'chart_routes_json': json.dumps(chart_routes,   cls=SafeEncoder),
-        'chart_floods_json': json.dumps(chart_floods,   cls=SafeEncoder),
-        'avg_score_json':    js_num(avg_score),
-        'center_lat_json':   js_num(center_lat),
-        'center_lng_json':   js_num(center_lng),
+        "zones":         zones,
+        "selected_zone": selected_zone,   # objet Zone ou None
+        "zone_code":     zone_code,       # string brut du GET — utilisé pour le <select>
+        # JSON pour Leaflet / Chart.js
+        "map_data_json":     json.dumps(map_data),
+        "chart_routes_json": json.dumps(chart_routes),
+        "chart_floods_json": json.dumps(chart_floods),
+        "avg_score_json":    json.dumps(avg_score),
+        "center_lat_json":   json.dumps(center_lat),
+        "center_lng_json":   json.dumps(center_lng),
+        # KPI routes
+        "avg_road_score":  avg_score,
+        "total_roads":     total_roads,
+        "critical_roads":  critical_roads,
+        "road_health_pct": road_health_pct,
+        # KPI inondations
+        "total_floods":    total_floods,
+        "critical_floods": critical_floods,
+        "avg_flood_risk":  avg_flood_risk,
+        # KPI végétation
+        "total_veg":       total_veg,
+        "dense_veg":       dense_veg,
+        "avg_ndvi":        avg_ndvi,
+        # Alertes
+        "recent_alerts": alerts,   # nommé recent_alerts pour matcher le template
+        "unread_alerts": unread,
+        # Méta
+        "last_update":   timezone.now(),
+        # GEE
+        "gee_available":  _gee_available(),
+        "zone_bbox_json": json.dumps(_zone_bbox(selected_zone)),
     }
-    return render(request, 'dashboard/index.html', context)
+    return render(request, "dashboard/index.html", context)
 
 
-# ─────────────────────────────────────────────────────────────
-#  API — CARTE
-# ─────────────────────────────────────────────────────────────
+# ── API — Carte ────────────────────────────────────────────────────────────────
 
 @require_GET
 def api_map_data(request):
-    zone_code = request.GET.get('zone', '')
-    layer     = request.GET.get('layer', 'all')
-    features  = []
+    zone_code     = request.GET.get("zone", "")
+    selected_zone = Zone.objects.filter(code=zone_code).first() if zone_code else None
 
-    if layer in ('roads', 'all'):
-        qs = RoadSegment.objects.select_related('zone')
-        if zone_code:
-            qs = qs.filter(zone__code=zone_code)
-        for r in qs:
-            geo = to_geojson(r.geojson)
-            if geo:
-                features.append({
-                    'type': 'Feature', 'geometry': geo,
-                    'properties': {
-                        'type': 'road', 'id': r.id, 'name': r.name,
-                        'status': r.status, 'status_label': r.get_status_display(),
-                        'score': safe_float(r.condition_score),
-                        'surface_type': r.surface_type or '',
-                        'color': ROAD_COLORS.get(r.status, '#6b7280'),
-                        'zone': r.zone.name,
-                        'analyzed': r.last_analyzed.strftime('%d/%m/%Y %H:%M') if r.last_analyzed else '',
-                        'notes': r.notes or '',
-                    }
-                })
+    roads_qs  = RoadSegment.objects.filter(zone=selected_zone) if selected_zone \
+                else RoadSegment.objects.all()
+    floods_qs = FloodRisk.objects.filter(zone=selected_zone) if selected_zone \
+                else FloodRisk.objects.all()
+    veg_qs    = VegetationDensity.objects.filter(zone=selected_zone) if selected_zone \
+                else VegetationDensity.objects.all()
 
-    if layer in ('floods', 'all'):
-        qs = FloodRisk.objects.select_related('zone')
-        if zone_code:
-            qs = qs.filter(zone__code=zone_code)
-        for f in qs:
-            geo = to_geojson(f.geojson)
-            if geo:
-                features.append({
-                    'type': 'Feature', 'geometry': geo,
-                    'properties': {
-                        'type': 'flood', 'id': f.id, 'name': f.name,
-                        'risk_level': f.risk_level, 'risk_label': f.get_risk_level_display(),
-                        'risk_score': safe_float(f.risk_score),
-                        'area_km2': safe_float(f.area_km2),
-                        'rainfall': safe_float(f.rainfall_mm),
-                        'color': FLOOD_COLORS.get(f.risk_level, '#22d3ee'),
-                        'zone': f.zone.name,
-                        'analyzed': f.last_analyzed.strftime('%d/%m/%Y %H:%M') if f.last_analyzed else '',
-                    }
-                })
-
-    if layer in ('vegetation', 'all'):
-        qs = VegetationDensity.objects.select_related('zone')
-        if zone_code:
-            qs = qs.filter(zone__code=zone_code)
-        for v in qs:
-            geo = to_geojson(v.geojson)
-            if geo:
-                features.append({
-                    'type': 'Feature', 'geometry': geo,
-                    'properties': {
-                        'type': 'vegetation', 'id': v.id, 'name': v.name,
-                        'ndvi': safe_float(v.ndvi_value),
-                        'density_class': v.density_class or '',
-                        'density_label': v.get_density_class_display(),
-                        'coverage_pct': safe_float(v.coverage_percent),
-                        'change': safe_float(v.change_vs_previous),
-                        'color': VEG_COLORS.get(v.density_class, '#4ade80'),
-                        'zone': v.zone.name,
-                        'analyzed': v.last_analyzed.strftime('%d/%m/%Y %H:%M') if v.last_analyzed else '',
-                    }
-                })
-
-    return JsonResponse({'type': 'FeatureCollection', 'features': features}, encoder=SafeEncoder)
+    return JsonResponse({
+        "routes": [
+            {"id": r.id, "name": r.name, "condition_score": r.condition_score,
+             "status": r.status, "color": _road_color(r.condition_score),
+             "geojson": _geojson(r)}
+            for r in roads_qs
+        ],
+        "floods": [
+            {"id": f.id, "name": f.name, "risk_level": f.risk_level,
+             "risk_score": f.risk_score, "geojson": _geojson(f)}
+            for f in floods_qs
+        ],
+        "vegetation": [
+            {"id": v.id, "name": v.name, "ndvi_value": _js_num(v.ndvi_value),
+             "density_class": v.density_class, "geojson": _geojson(v)}
+            for v in veg_qs
+        ],
+    })
 
 
-# ─────────────────────────────────────────────────────────────
-#  API — ALERTES
-# ─────────────────────────────────────────────────────────────
+# ── API — Alertes ──────────────────────────────────────────────────────────────
 
 @require_GET
 def api_alerts(request):
-    alerts = Alert.objects.filter(is_read=False).order_by('-created_at')[:20]
-    data = [
-        {
-            'id': a.id, 'title': a.title, 'message': a.message,
-            'severity': a.severity, 'category': a.category,
-            'cat_label': a.get_category_display(),
-            'created_at': a.created_at.strftime('%d/%m/%Y %H:%M'),
-            'lat': safe_float(a.lat), 'lng': safe_float(a.lng),
-            'zone': a.zone.name if a.zone else None,
-        }
-        for a in alerts
-    ]
-    return JsonResponse({'alerts': data, 'count': len(data)}, encoder=SafeEncoder)
+    zone_code = request.GET.get("zone", "")
+    qs = Alert.objects.filter(is_read=False)
+    if zone_code:
+        qs = qs.filter(zone__code=zone_code)
+    qs = qs.order_by("-created_at")[:20]
+
+    return JsonResponse({
+        "count": qs.count(),
+        "alerts": [
+            {
+                "id":       a.id,
+                "title":    a.title,
+                "message":  a.message,
+                "severity": a.severity,
+                "category": a.category,
+                "lat":      _js_num(a.lat),
+                "lng":      _js_num(a.lng),
+                "created":  a.created_at.isoformat(),
+            }
+            for a in qs
+        ],
+    })
 
 
-@require_POST
+@require_GET
 def api_mark_alert_read(request, alert_id):
     alert = get_object_or_404(Alert, id=alert_id)
     alert.is_read = True
-    alert.save()
-    return JsonResponse({'status': 'ok', 'remaining': Alert.objects.filter(is_read=False).count()})
+    alert.save(update_fields=["is_read"])
+    return JsonResponse({"ok": True})
 
 
-# ─────────────────────────────────────────────────────────────
-#  API — STATS PAR ZONE
-# ─────────────────────────────────────────────────────────────
+# ── API — Stats zone ───────────────────────────────────────────────────────────
 
 @require_GET
 def api_zone_stats(request, zone_code):
-    zone   = get_object_or_404(Zone, code=zone_code)
-    roads  = RoadSegment.objects.filter(zone=zone)
-    floods = FloodRisk.objects.filter(zone=zone)
-    vegs   = VegetationDensity.objects.filter(zone=zone)
-
+    zone  = get_object_or_404(Zone, code=zone_code)
+    roads = RoadSegment.objects.filter(zone=zone)
+    avg   = roads.aggregate(avg=Avg("condition_score"))["avg"] or 0
     return JsonResponse({
-        'zone': {'name': zone.name, 'code': zone.code},
-        'roads': {
-            'total': roads.count(),
-            'avg_score': safe_float(roads.aggregate(avg=Avg('condition_score'))['avg']),
-            'by_status': {s: roads.filter(status=s).count() for s in ('bon', 'degrade', 'critique', 'ferme')},
-        },
-        'floods': {
-            'total': floods.count(),
-            'avg_risk': safe_float(floods.aggregate(avg=Avg('risk_score'))['avg']),
-            'total_area': round(sum(safe_float(f.area_km2) for f in floods), 2),
-            'by_level': {lvl: floods.filter(risk_level=lvl).count() for lvl in ('faible', 'modere', 'eleve', 'critique')},
-        },
-        'vegetation': {
-            'total': vegs.count(),
-            'avg_ndvi': safe_float(vegs.aggregate(avg=Avg('ndvi_value'))['avg']),
-            'avg_coverage': safe_float(vegs.aggregate(avg=Avg('coverage_percent'))['avg']),
-        },
-        'alerts': Alert.objects.filter(zone=zone, is_read=False).count(),
-    }, encoder=SafeEncoder)
+        "zone_code":   zone_code,
+        "avg_score":   round(float(avg), 1),
+        "road_count":  roads.count(),
+        "flood_count": FloodRisk.objects.filter(zone=zone).count(),
+        "alert_count": Alert.objects.filter(zone=zone, is_read=False).count(),
+    })
+
+
+# ── API — Google Earth Engine (asynchrone) ─────────────────────────────────────
+
+@require_GET
+def api_gee_ndvi(request):
+    zone_code = request.GET.get("zone", "")
+    zone  = Zone.objects.filter(code=zone_code).first() if zone_code else None
+    bbox  = _zone_bbox(zone)
+    try:
+        from .gee_integration import get_ndvi_stats
+        data = get_ndvi_stats(bbox)
+        return JsonResponse(data or {"error": "Aucune donnée NDVI"})
+    except Exception as e:
+        logger.error("[GEE NDVI] %s", e)
+        return JsonResponse({"error": str(e)}, status=503)
+
+
+@require_GET
+def api_gee_flood(request):
+    zone_code = request.GET.get("zone", "")
+    zone  = Zone.objects.filter(code=zone_code).first() if zone_code else None
+    bbox  = _zone_bbox(zone)
+    try:
+        from .gee_integration import get_flood_extent
+        data = get_flood_extent(bbox)
+        return JsonResponse(data or {"error": "Aucune donnée SAR"})
+    except Exception as e:
+        logger.error("[GEE FLOOD] %s", e)
+        return JsonResponse({"error": str(e)}, status=503)
+
+
+@require_GET
+def api_gee_road(request):
+    zone_code = request.GET.get("zone", "")
+    zone  = Zone.objects.filter(code=zone_code).first() if zone_code else None
+    bbox  = _zone_bbox(zone)
+    try:
+        from .gee_integration import get_road_surface_index
+        data = get_road_surface_index(bbox)
+        return JsonResponse(data or {"error": "Aucune donnée surface"})
+    except Exception as e:
+        logger.error("[GEE ROAD] %s", e)
+        return JsonResponse({"error": str(e)}, status=503)

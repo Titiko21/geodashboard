@@ -2,393 +2,420 @@
 <!DOCTYPE html>
 <html lang="fr" data-theme="light">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GéoDash — Analyse Géospatiale</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GéoDash — Analyse Géospatiale</title>
 
-  <!--
-    Script anti-flash : lit localStorage AVANT le premier rendu.
-    Placé en premier dans <head> pour éviter un flash blanc → noir.
-  -->
-  <script>
-    (function () {
-      try {
-        var t = localStorage.getItem('gd-theme');
-        if (t === 'dark' || t === 'light') {
-          document.documentElement.setAttribute('data-theme', t);
-        }
-      } catch (e) {}
-    })();
-  </script>
+    <!--
+        Prévention du FOUC (Flash of Unstyled Content) sur le thème.
+        Ce script tourne AVANT que le CSS soit parsé — c'est voulu.
+        On lit gd-theme dans localStorage et on l'applique directement
+        sur <html> pour que le thème soit correct dès le premier rendu.
+    -->
+    <script>
+        (function () {
+            try {
+                const saved = localStorage.getItem('gd-theme');
+                if (saved === 'dark' || saved === 'light') {
+                    document.documentElement.setAttribute('data-theme', saved);
+                }
+            } catch (e) {
+                // localStorage peut être bloqué (mode privé strict, Safari ITP…)
+            }
+        })();
+    </script>
 
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{% static 'dashboard/css/leaflet.min.css' %}">
-  <script src="{% static 'dashboard/js/leaflet.min.js' %}"></script>
-  <script src="{% static 'dashboard/js/chart.min.js' %}"></script>
-  <link rel="stylesheet" href="{% static 'dashboard/css/dashboard.css' %}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" href="{% static 'dashboard/css/leaflet.min.css' %}">
+    <!--
+        Leaflet et Chart.js chargés de façon synchrone intentionnellement.
+        dashboard.js (en bas de <body>) en dépend directement — on évite
+        les problèmes de timing qu'on aurait avec defer + dépendances chaînées.
+    -->
+    <script src="{% static 'dashboard/js/leaflet.min.js' %}"></script>
+    <script src="{% static 'dashboard/js/chart.min.js' %}"></script>
+    <link rel="stylesheet" href="{% static 'dashboard/css/dashboard.css' %}">
 </head>
 <body>
 
-<!-- ── SPRITE SVG ──────────────────────────────────────── -->
+<!-- Sprite SVG centralisé — tous les icônes du dashboard référencent ces symboles via <use> -->
 <svg style="display:none" aria-hidden="true">
-  <symbol id="i-road" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M12 2v20M8 4l4-2 4 2M8 20l4 2 4-2M2 8h4M18 8h4M2 16h4M18 16h4"/>
-  </symbol>
-  <symbol id="i-flood" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M12 2C9.5 5.5 7 7.5 7 11a5 5 0 0 0 10 0c0-3.5-2.5-5.5-5-9z"/>
-    <path d="M3 17c1.5-2.5 3-2.5 4.5 0s3 2.5 4.5 0 3-2.5 4.5 0 3 2.5 4.5 0"/>
-  </symbol>
-  <symbol id="i-leaf" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10z"/>
-    <path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/>
-  </symbol>
-  <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-    <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-  </symbol>
-  <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="20 6 9 17 4 12"/>
-  </symbol>
-  <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <polygon points="12 2 2 7 12 12 22 7 12 2"/>
-    <polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>
-  </symbol>
-  <symbol id="i-map" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/>
-    <line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/>
-  </symbol>
-  <symbol id="i-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
-    <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-  </symbol>
-  <symbol id="i-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-  </symbol>
-  <symbol id="i-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <circle cx="12" cy="12" r="3"/>
-    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-  </symbol>
-  <symbol id="i-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-    <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
-    <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
-  </symbol>
-  <!-- Icônes thème : soleil + lune -->
-  <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-    <circle cx="12" cy="12" r="5"/>
-    <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
-    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-    <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
-    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-  </symbol>
-  <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-  </symbol>
+    <symbol id="i-road" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2v20M8 4l4-2 4 2M8 20l4 2 4-2M2 8h4M18 8h4M2 16h4M18 16h4"/>
+    </symbol>
+    <symbol id="i-flood" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2C9.5 5.5 7 7.5 7 11a5 5 0 0 0 10 0c0-3.5-2.5-5.5-5-9z"/>
+        <path d="M3 17c1.5-2.5 3-2.5 4.5 0s3 2.5 4.5 0 3-2.5 4.5 0 3 2.5 4.5 0"/>
+    </symbol>
+    <symbol id="i-leaf" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10z"/>
+        <path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/>
+    </symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+        <line x1="12" y1="9" x2="12" y2="13"/>
+        <line x1="12" y1="17" x2="12.01" y2="17"/>
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="20 6 9 17 4 12"/>
+    </symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+        <polyline points="2 17 12 22 22 17"/>
+        <polyline points="2 12 12 17 22 12"/>
+    </symbol>
+    <symbol id="i-map" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/>
+        <line x1="8" y1="2" x2="8" y2="18"/>
+        <line x1="16" y1="6" x2="16" y2="22"/>
+    </symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+        <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+    </symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+    </symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l-.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="7"/>
+        <rect x="14" y="3" width="7" height="7"/>
+        <rect x="14" y="14" width="7" height="7"/>
+        <rect x="3" y="14" width="7" height="7"/>
+    </symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="5"/>
+        <line x1="12" y1="1" x2="12" y2="3"/>
+        <line x1="12" y1="21" x2="12" y2="23"/>
+        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+        <line x1="1" y1="12" x2="3" y2="12"/>
+        <line x1="21" y1="12" x2="23" y2="12"/>
+        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+    </symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+    </symbol>
 </svg>
 
-<!-- ── HEADER ──────────────────────────────────────────── -->
+<!-- En-tête global : logo, zone active, contrôles rapides (thème, alertes) -->
 <header class="hdr">
-  <a class="logo" href="/">
-    <div class="logo-badge">GD</div>
-    <div>
-      <div class="logo-name">GéoDash</div>
-      <div class="logo-sub">Analyse Géospatiale</div>
+    <a class="logo" href="/" aria-label="Retour à l'accueil">
+        <div class="logo-badge">GD</div>
+        <div>
+            <div class="logo-name">GéoDash</div>
+            <div class="logo-sub">Analyse Géospatiale</div>
+        </div>
+    </a>
+
+    <div class="hdr-title">
+        <span class="hdr-title-main">
+            {% if selected_zone and zone_code %}{{ selected_zone.name }}{% else %}Toutes les zones{% endif %}
+        </span>
+        <span class="hdr-title-sub">
+            {% if selected_zone and zone_code %}{{ selected_zone.code }}{% else %}Vue globale{% endif %}
+        </span>
     </div>
-  </a>
 
-  <div class="hdr-title">
-    <span class="hdr-title-main">
-      {% if current_zone %}{{ current_zone.name }}{% else %}Toutes les zones{% endif %}
-    </span>
-    <span class="hdr-title-sub">
-      {% if current_zone %}{{ current_zone.code }}{% else %}Vue globale{% endif %}
-    </span>
-  </div>
-
-  <div class="zone-wrap">
-    <label>Zone</label>
-    <select class="zone-select" id="zoneSelect">
-      <option value="">— Toutes les zones —</option>
-      {% for zone in zones %}
-      <option value="{{ zone.code }}" {% if selected_zone == zone.code %}selected{% endif %}>
-        {{ zone.name }}
-      </option>
-      {% endfor %}
-    </select>
-  </div>
-
-  <div class="hdr-right">
-    <div class="status-live">
-      <div class="live-dot"></div>EN LIGNE
+    <!-- Sélecteur de zone — déclenche un reload via switchZone() dans dashboard.js -->
+    <!-- data-url passe l'URL Django résolue au JS pour éviter l'URL hardcodée -->
+    <div class="zone-wrap">
+        <label for="zoneSelect">Zone</label>
+        <select class="zone-select" id="zoneSelect"
+                data-url="{% url 'dashboard:index' %}">
+            <option value="">— Toutes les zones —</option>
+            {% for zone in zones %}
+            <option value="{{ zone.code }}" {% if zone_code == zone.code %}selected{% endif %}>
+                {{ zone.name }}
+            </option>
+            {% endfor %}
+        </select>
     </div>
-    <div class="hdr-sep"></div>
-    <div class="last-upd">MAJ <span id="lastUpd">{{ last_update|date:"d/m H:i" }}</span></div>
-    <div class="hdr-sep"></div>
 
-    <!-- Bouton toggle thème clair / sombre -->
-    <button class="theme-toggle" id="themeToggle" title="Changer le thème" aria-label="Changer le thème">
-      <svg class="th-sun"  width="15" height="15"><use href="#i-sun"/></svg>
-      <svg class="th-moon" width="15" height="15"><use href="#i-moon"/></svg>
-    </button>
+    <div class="hdr-right">
+        <div class="status-live">
+            <div class="live-dot"></div>EN LIGNE
+        </div>
+        <div class="hdr-sep"></div>
+        <div class="last-upd">MAJ <span id="lastUpd">{{ last_update|date:"d/m H:i" }}</span></div>
+        <div class="hdr-sep"></div>
 
-    <div class="hdr-sep"></div>
-    <div class="alert-pill {% if unread_alerts > 0 %}hot{% else %}ok{% endif %}" id="alertPill">
-      {% if unread_alerts > 0 %}
-        <svg width="11" height="11"><use href="#i-alert"/></svg>
-        {{ unread_alerts }} ALERTE{% if unread_alerts > 1 %}S{% endif %}
-      {% else %}
-        <svg width="11" height="11"><use href="#i-check"/></svg> RAS
-      {% endif %}
+        <!-- Toggle thème — l'icône visible dépend du data-theme sur <html> via CSS -->
+        <button type="button" class="theme-toggle" id="themeToggle" aria-label="Basculer le thème clair/sombre">
+            <svg class="th-sun" width="15" height="15" aria-hidden="true"><use href="#i-sun"></use></svg>
+            <svg class="th-moon" width="15" height="15" aria-hidden="true"><use href="#i-moon"></use></svg>
+        </button>
+
+        <div class="hdr-sep"></div>
+
+        <!-- Pastille alertes — mise à jour dynamiquement via refreshAlerts() -->
+        <div class="alert-pill {% if unread_alerts > 0 %}hot{% else %}ok{% endif %}" id="alertPill">
+            {% if unread_alerts > 0 %}
+                <svg width="11" height="11" aria-hidden="true"><use href="#i-alert"></use></svg>
+                {{ unread_alerts }} ALERTE{% if unread_alerts > 1 %}S{% endif %}
+            {% else %}
+                <svg width="11" height="11" aria-hidden="true"><use href="#i-check"></use></svg> RAS
+            {% endif %}
+        </div>
     </div>
-  </div>
 </header>
 
-<!-- ── LAYOUT ──────────────────────────────────────────── -->
-<div class="layout">
+<!--
+    Layout principal en CSS Grid (nav | map | panel / nav | charts | panel).
+    On utilise <main> pour la sémantique — c'est le contenu central de la page.
+-->
+<main class="layout">
 
-  <!-- NAV GAUCHE -->
-  <nav class="nav-left">
-    <div class="nav-section-label">Navigation</div>
+    <!-- Navigation latérale — les data-set-layer déclenchent setLayer() -->
+    <nav class="nav-left" aria-label="Navigation des couches">
+        <div class="nav-section-label">Navigation</div>
 
-    <div class="nav-item active" data-set-layer="all">
-      <svg><use href="#i-grid"/></svg>
-      <span class="nav-item-label">Dashboard</span>
-    </div>
-    <div class="nav-item" data-set-layer="roads">
-      <svg><use href="#i-road"/></svg>
-      <span class="nav-item-label">Routes</span>
-    </div>
-    <div class="nav-item" data-set-layer="floods">
-      <svg><use href="#i-flood"/></svg>
-      <span class="nav-item-label">Inondations</span>
-    </div>
-    <div class="nav-item" data-set-layer="vegetation">
-      <svg><use href="#i-leaf"/></svg>
-      <span class="nav-item-label">Végétation</span>
-    </div>
+        <div class="nav-item active" data-set-layer="all">
+            <svg aria-hidden="true"><use href="#i-grid"></use></svg>
+            <span class="nav-item-label">Dashboard</span>
+        </div>
+        <div class="nav-item" data-set-layer="roads">
+            <svg aria-hidden="true"><use href="#i-road"></use></svg>
+            <span class="nav-item-label">Routes</span>
+        </div>
+        <div class="nav-item" data-set-layer="floods">
+            <svg aria-hidden="true"><use href="#i-flood"></use></svg>
+            <span class="nav-item-label">Inondations</span>
+        </div>
+        <div class="nav-item" data-set-layer="vegetation">
+            <svg aria-hidden="true"><use href="#i-leaf"></use></svg>
+            <span class="nav-item-label">Végétation</span>
+        </div>
 
-    <div class="nav-spacer"></div>
-    <div class="nav-divider"></div>
-    <div class="nav-section-label">Système</div>
+        <div class="nav-spacer"></div>
+        <div class="nav-divider"></div>
+        <div class="nav-section-label">Système</div>
 
-    <div class="nav-item">
-      <svg><use href="#i-bell"/></svg>
-      <span class="nav-item-label">Alertes</span>
-      {% if unread_alerts > 0 %}
-      <span class="nav-badge">{{ unread_alerts }}</span>
-      {% endif %}
-    </div>
-    <div class="nav-item">
-      <svg><use href="#i-settings"/></svg>
-      <span class="nav-item-label">Paramètres</span>
-    </div>
-  </nav>
+        <div class="nav-item">
+            <svg aria-hidden="true"><use href="#i-bell"></use></svg>
+            <span class="nav-item-label">Alertes</span>
+            {% if unread_alerts > 0 %}<span class="nav-badge">{{ unread_alerts }}</span>{% endif %}
+        </div>
+        <div class="nav-item" data-open-settings>
+            <svg aria-hidden="true"><use href="#i-settings"></use></svg>
+            <span class="nav-item-label">Paramètres</span>
+        </div>
+    </nav>
 
-  <!-- CARTE -->
-  <div class="map-area">
-    <div class="map-toolbar">
-      <button class="mb active" data-set-layer="all">
-        <svg width="12" height="12"><use href="#i-map"/></svg> Tout
-      </button>
-      <button class="mb" data-set-layer="roads">
-        <svg width="12" height="12"><use href="#i-road"/></svg> Routes
-      </button>
-      <button class="mb" data-set-layer="floods">
-        <svg width="12" height="12"><use href="#i-flood"/></svg> Inondations
-      </button>
-      <button class="mb" data-set-layer="vegetation">
-        <svg width="12" height="12"><use href="#i-leaf"/></svg> Végétation
-      </button>
-    </div>
+    <!-- Zone carte — Leaflet s'y monte via initMap(), #map prend tout l'espace disponible -->
+    <div class="map-area">
+        <div class="map-toolbar">
+            <button type="button" class="mb active" data-set-layer="all">
+                <svg width="12" height="12" aria-hidden="true"><use href="#i-map"></use></svg> Tout
+            </button>
+            <button type="button" class="mb" data-set-layer="roads">
+                <svg width="12" height="12" aria-hidden="true"><use href="#i-road"></use></svg> Routes
+            </button>
+            <button type="button" class="mb" data-set-layer="floods">
+                <svg width="12" height="12" aria-hidden="true"><use href="#i-flood"></use></svg> Inondations
+            </button>
+            <button type="button" class="mb" data-set-layer="vegetation">
+                <svg width="12" height="12" aria-hidden="true"><use href="#i-leaf"></use></svg> Végétation
+            </button>
+        </div>
 
-    <div class="map-legend">
-      <div class="ml-ttl">Légende</div>
-      <div class="ml-row"><div class="ml-line" style="background:#28b857"></div>Route — Bon</div>
-      <div class="ml-row"><div class="ml-line" style="background:#e67e22"></div>Route — Dégradé</div>
-      <div class="ml-row"><div class="ml-line" style="background:#f43f5e"></div>Route — Critique</div>
-      <div class="ml-row"><div class="ml-line" style="background:#94a3b8"></div>Route — Fermé</div>
-      <div class="ml-sep"></div>
-      <div class="ml-row"><div class="ml-poly" style="background:#26c6da"></div>Zone inondation</div>
-      <div class="ml-row"><div class="ml-poly" style="background:#3ecf6e"></div>Végétation</div>
-    </div>
+        <div class="map-legend">
+            <div class="ml-ttl">Légende</div>
+            <div class="ml-row"><div class="ml-line" style="background:#28b857"></div>Route — Bon</div>
+            <div class="ml-row"><div class="ml-line" style="background:#e67e22"></div>Route — Dégradé</div>
+            <div class="ml-row"><div class="ml-line" style="background:#f43f5e"></div>Route — Critique</div>
+            <div class="ml-row"><div class="ml-line" style="background:#94a3b8"></div>Route — Fermé</div>
+            <div class="ml-sep"></div>
+            <div class="ml-row"><div class="ml-poly" style="background:#26c6da"></div>Zone inondation</div>
+            <div class="ml-row"><div class="ml-poly" style="background:#3ecf6e"></div>Végétation</div>
+        </div>
 
-    <div class="map-overlay" id="mapOverlay">
-      <div class="spinner"></div>
-      <div class="map-overlay-label">Chargement de la carte…</div>
-    </div>
-    <div id="map"></div>
-  </div>
+        <div class="map-overlay" id="mapOverlay">
+            <div class="spinner"></div>
+            <div class="map-overlay-label">Chargement de la carte…</div>
+        </div>
 
-  <!-- PANEL DROIT -->
-  <aside class="panel-right">
-
-    <div class="panel-hdr">
-      <div class="panel-hdr-title">Indicateurs clés</div>
+        <div id="map" role="region" aria-label="Carte géospatiale interactive"></div>
     </div>
 
     <!--
-      panel-mid : conteneur scrollable contenant KPIs + Couches.
-      Cela garantit que "Couches carte" est toujours accessible
-      même si les KPIs dépassent la hauteur disponible.
+        Panel droit — structure corrigée dans une session précédente.
+        panel-body(flex:1, overflow-y:auto) contient tout le contenu scrollable
+        au lieu d'avoir panel-mid + alerts-sec avec des max-height qui débordaient.
     -->
-    <div class="panel-mid">
-
-      <!-- KPI Cards -->
-      <div class="kpi-grid">
-
-        <div class="kpi-card" data-layer="roads">
-          <div class="kpi-top">
-            <div class="kpi-label">Santé routière</div>
-            <div class="kpi-icon road"><svg><use href="#i-road"/></svg></div>
-          </div>
-          <div class="kpi-value {% if avg_road_score >= 70 %}good{% elif avg_road_score >= 40 %}warn{% else %}danger{% endif %}">
-            {{ avg_road_score }}<span class="unit">/100</span>
-          </div>
-          <div class="kpi-sub">{{ critical_roads }} segment{% if critical_roads != 1 %}s{% endif %} en alerte</div>
-          <div class="kpi-bar">
-            <div class="kpi-bar-fill" style="width:{{ road_health_pct|default:0 }}%"></div>
-          </div>
+    <aside class="panel-right" aria-label="Indicateurs et alertes">
+        <div class="panel-hdr">
+            <div class="panel-hdr-title">Indicateurs clés</div>
         </div>
 
-        <div class="kpi-card" data-layer="floods">
-          <div class="kpi-top">
-            <div class="kpi-label">Risque inondation</div>
-            <div class="kpi-icon flood"><svg><use href="#i-flood"/></svg></div>
-          </div>
-          <div class="kpi-value {% if avg_flood_risk <= 30 %}good{% elif avg_flood_risk <= 60 %}warn{% else %}danger{% endif %}">
-            {{ avg_flood_risk }}<span class="unit">/100</span>
-          </div>
-          <div class="kpi-sub">{{ critical_floods }} zone{% if critical_floods != 1 %}s{% endif %} à risque élevé</div>
-          <div class="kpi-bar">
-            <div class="kpi-bar-fill flood" style="width:{{ avg_flood_risk|default:0 }}%"></div>
-          </div>
-        </div>
+        <div class="panel-body">
 
-        <div class="kpi-card" data-layer="vegetation">
-          <div class="kpi-top">
-            <div class="kpi-label">NDVI moyen</div>
-            <div class="kpi-icon veg"><svg><use href="#i-leaf"/></svg></div>
-          </div>
-          <div class="kpi-value" style="color:#26c6da">{{ avg_ndvi }}</div>
-          <div class="kpi-sub">{{ dense_veg }} zone{% if dense_veg != 1 %}s{% endif %} dense{% if dense_veg != 1 %}s{% endif %}</div>
-          <div class="kpi-bar">
-            {% widthratio avg_ndvi 1 100 as ndvi_pct %}
-            <div class="kpi-bar-fill veg" style="width:{{ ndvi_pct|default:0 }}%"></div>
-          </div>
-        </div>
+            <!-- KPI cards — un clic déclenche setLayer() + flyToBounds via initEventListeners() -->
+            <div class="kpi-grid">
+                <div class="kpi-card" data-layer="roads">
+                    <div class="kpi-top">
+                        <div class="kpi-label">Santé routière</div>
+                        <div class="kpi-icon road">
+                            <svg aria-hidden="true"><use href="#i-road"></use></svg>
+                        </div>
+                    </div>
+                    <div class="kpi-value {% if avg_road_score >= 70 %}good{% elif avg_road_score >= 40 %}warn{% else %}danger{% endif %}">
+                        {{ avg_road_score }}<span class="unit">/100</span>
+                    </div>
+                    <div class="kpi-sub">{{ critical_roads }} segment{% if critical_roads != 1 %}s{% endif %} en alerte</div>
+                    <div class="kpi-bar">
+                        <div class="kpi-bar-fill" style="width:{{ road_health_pct|default:0 }}%"></div>
+                    </div>
+                </div>
 
-      </div>
+                <div class="kpi-card" data-layer="floods">
+                    <div class="kpi-top">
+                        <div class="kpi-label">Risque inondation</div>
+                        <div class="kpi-icon flood">
+                            <svg aria-hidden="true"><use href="#i-flood"></use></svg>
+                        </div>
+                    </div>
+                    <div class="kpi-value {% if avg_flood_risk <= 30 %}good{% elif avg_flood_risk <= 60 %}warn{% else %}danger{% endif %}">
+                        {{ avg_flood_risk }}<span class="unit">/100</span>
+                    </div>
+                    <div class="kpi-sub">{{ critical_floods }} zone{% if critical_floods != 1 %}s{% endif %} à risque élevé</div>
+                    <div class="kpi-bar">
+                        <div class="kpi-bar-fill flood" style="width:{{ avg_flood_risk|default:0 }}%"></div>
+                    </div>
+                </div>
 
-      <!-- Couches carte — TOUJOURS visible grâce au panel-mid scrollable -->
-      <div class="layers-sec">
-        <div class="layers-title">
-          <svg width="11" height="11"><use href="#i-layers"/></svg> Couches carte
-        </div>
-        <div class="layer-row" data-toggle-layer="roads">
-          <input type="checkbox" checked>
-          <div class="l-indicator" style="background:#5b8dee"></div>
-          <span class="l-name">Routes</span>
-          <span class="l-count">{{ total_roads }}</span>
-        </div>
-        <div class="layer-row" data-toggle-layer="floods">
-          <input type="checkbox" checked>
-          <div class="l-indicator" style="background:#26c6da"></div>
-          <span class="l-name">Risques inondation</span>
-          <span class="l-count">{{ critical_floods }}</span>
-        </div>
-        <div class="layer-row" data-toggle-layer="vegetation">
-          <input type="checkbox" checked>
-          <div class="l-indicator" style="background:#3ecf6e"></div>
-          <span class="l-name">Végétation</span>
-          <span class="l-count">{{ dense_veg }}</span>
-        </div>
-      </div>
-
-    </div>{# /panel-mid #}
-
-    <!-- Alertes — section fixe en bas du panel -->
-    <div class="alerts-sec">
-      <div class="alerts-hdr">
-        <div class="alerts-title">
-          <svg width="11" height="11"><use href="#i-bell"/></svg> Alertes actives
-        </div>
-        <span id="alertCount" class="alerts-count {% if not unread_alerts %}zero{% endif %}">
-          {{ unread_alerts }}
-        </span>
-      </div>
-      <div class="alerts-scroll">
-        {% if recent_alerts %}
-          {% for a in recent_alerts %}
-          <div class="a-item {{ a.severity }}"
-            data-lat="{{ a.lat|default:0 }}"
-            data-lng="{{ a.lng|default:0 }}"
-            data-focus-alert>
-            <div class="a-title">{{ a.title }}</div>
-            <div class="a-msg">{{ a.message|truncatechars:80 }}</div>
-            <div class="a-foot">
-              <span class="a-tag tag-{{ a.category }}">{{ a.get_category_display }}</span>
-              <span class="a-time">{{ a.created_at|timesince }}</span>
+                <div class="kpi-card" data-layer="vegetation">
+                    <div class="kpi-top">
+                        <div class="kpi-label">NDVI moyen</div>
+                        <div class="kpi-icon veg">
+                            <svg aria-hidden="true"><use href="#i-leaf"></use></svg>
+                        </div>
+                    </div>
+                    <div class="kpi-value" style="color:#26c6da">{{ avg_ndvi }}</div>
+                    <div class="kpi-sub">{{ dense_veg }} zone{% if dense_veg != 1 %}s{% endif %} dense{% if dense_veg != 1 %}s{% endif %}</div>
+                    <div class="kpi-bar">
+                        {% widthratio avg_ndvi 1 100 as ndvi_pct %}
+                        <div class="kpi-bar-fill veg" style="width:{{ ndvi_pct|default:0 }}%"></div>
+                    </div>
+                </div>
             </div>
-          </div>
-          {% endfor %}
-        {% else %}
-          <div class="a-empty">
-            <svg width="28" height="28"><use href="#i-check"/></svg>
-            Aucune alerte active
-          </div>
-        {% endif %}
-      </div>
-    </div>
 
-  </aside>
-
-  <!-- GRAPHIQUES -->
-  <div class="charts-bar">
-
-    <div class="chart-pane">
-      <div class="chart-ttl">
-        <svg width="10" height="10"><use href="#i-road"/></svg> État des routes
-      </div>
-      <div class="chart-body"><canvas id="cRoad"></canvas></div>
-    </div>
-
-    <div class="chart-pane">
-      <div class="chart-ttl">
-        <svg width="10" height="10"><use href="#i-flood"/></svg> Risques inondation
-      </div>
-      <div class="chart-body"><canvas id="cFlood"></canvas></div>
-    </div>
-
-    <div class="chart-pane score-pane">
-      <div class="chart-ttl">
-        <svg width="10" height="10"><use href="#i-pulse"/></svg> Score global
-      </div>
-      <div class="score-inner">
-        <div class="gauge-wrap">
-          <canvas id="cGauge"></canvas>
-          <div class="gauge-ctr">
-            <div class="gauge-num {% if avg_road_score >= 70 %}g{% elif avg_road_score >= 40 %}w{% else %}b{% endif %}" id="gaugeNum">
-              {{ avg_road_score }}
+            <!-- Toggles couches — checkboxes cachées, état géré par toggleLayer() -->
+            <div class="layers-sec">
+                <div class="layers-title">
+                    <svg width="11" height="11" aria-hidden="true"><use href="#i-layers"></use></svg> Couches carte
+                </div>
+                <div class="layer-row" data-toggle-layer="roads">
+                    <input type="checkbox" aria-label="Afficher les routes" checked>
+                    <div class="l-indicator" style="background:#5b8dee"></div>
+                    <span class="l-name">Routes</span>
+                    <span class="l-count">{{ total_roads }}</span>
+                </div>
+                <div class="layer-row" data-toggle-layer="floods">
+                    <input type="checkbox" aria-label="Afficher les risques d'inondation" checked>
+                    <div class="l-indicator" style="background:#26c6da"></div>
+                    <span class="l-name">Risques inondation</span>
+                    <span class="l-count">{{ critical_floods }}</span>
+                </div>
+                <div class="layer-row" data-toggle-layer="vegetation">
+                    <input type="checkbox" aria-label="Afficher la végétation" checked>
+                    <div class="l-indicator" style="background:#3ecf6e"></div>
+                    <span class="l-name">Végétation</span>
+                    <span class="l-count">{{ dense_veg }}</span>
+                </div>
             </div>
-            <div class="gauge-den">/100</div>
-          </div>
+
+            <!-- Liste des alertes actives — un clic déclenche focusAlert() avec marqueur pulsant -->
+            <div class="alerts-sec">
+                <div class="alerts-hdr">
+                    <div class="alerts-title">
+                        <svg width="11" height="11" aria-hidden="true"><use href="#i-bell"></use></svg> Alertes actives
+                    </div>
+                    <span id="alertCount" class="alerts-count {% if not unread_alerts %}zero{% endif %}">
+                        {{ unread_alerts }}
+                    </span>
+                </div>
+                <div class="alerts-scroll">
+                    {% if recent_alerts %}
+                        {% for a in recent_alerts %}
+                        <div class="a-item {{ a.severity }}"
+                             data-lat="{{ a.lat|default:0 }}"
+                             data-lng="{{ a.lng|default:0 }}"
+                             data-category="{{ a.category|default:'' }}"
+                             data-focus-alert>
+                            <div class="a-title">{{ a.title }}</div>
+                            <div class="a-msg">{{ a.message|truncatechars:80 }}</div>
+                            <div class="a-foot">
+                                <span class="a-tag tag-{{ a.category }}">{{ a.get_category_display }}</span>
+                                <span class="a-time">{{ a.created_at|timesince }}</span>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    {% else %}
+                        <div class="a-empty">
+                            <svg width="28" height="28" aria-hidden="true"><use href="#i-check"></use></svg>
+                            Aucune alerte active
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+
+        </div>{# fin panel-body #}
+    </aside>
+
+    <!-- Barre de graphiques en bas — routes (bar), inondations (donut), score global (gauge) -->
+    <div class="charts-bar">
+        <div class="chart-pane">
+            <div class="chart-ttl">
+                <svg width="10" height="10" aria-hidden="true"><use href="#i-road"></use></svg> État des routes
+            </div>
+            <div class="chart-body"><canvas id="cRoad"></canvas></div>
         </div>
-        <div class="score-meta">
-          <div class="sm-row"><span class="sm-key">Rapport</span>{{ last_update|date:"d/m/Y" }}</div>
-          <div class="sm-row"><span class="sm-key">Heure</span>{{ last_update|date:"H:i" }}</div>
-          <div class="sm-row"><span class="sm-key">Zones</span>{{ zones|length }}</div>
-          <div class="sm-cnt">{{ total_roads }} routes analysées</div>
+        <div class="chart-pane">
+            <div class="chart-ttl">
+                <svg width="10" height="10" aria-hidden="true"><use href="#i-flood"></use></svg> Risques inondation
+            </div>
+            <div class="chart-body"><canvas id="cFlood"></canvas></div>
         </div>
-      </div>
+        <div class="chart-pane score-pane">
+            <div class="chart-ttl">
+                <svg width="10" height="10" aria-hidden="true"><use href="#i-pulse"></use></svg> Score global
+            </div>
+            <div class="score-inner">
+                <div class="gauge-wrap">
+                    <canvas id="cGauge"></canvas>
+                    <div class="gauge-ctr">
+                        <div class="gauge-num {% if avg_road_score >= 70 %}g{% elif avg_road_score >= 40 %}w{% else %}b{% endif %}" id="gaugeNum">
+                            {{ avg_road_score }}
+                        </div>
+                        <div class="gauge-den">/100</div>
+                    </div>
+                </div>
+                <div class="score-meta">
+                    <div class="sm-row"><span class="sm-key">Rapport</span>{{ last_update|date:"d/m/Y" }}</div>
+                    <div class="sm-row"><span class="sm-key">Heure</span>{{ last_update|date:"H:i" }}</div>
+                    <div class="sm-row"><span class="sm-key">Zones</span>{{ zones|length }}</div>
+                    <div class="sm-cnt">{{ total_roads }} routes analysées</div>
+                </div>
+            </div>
+        </div>
     </div>
 
-  </div>
+</main>{# fin .layout #}
 
-</div>{# /layout #}
+<!-- Zone de toasts (notifications temporaires) — injectés dynamiquement via toast() -->
+<div id="toasts" aria-live="polite" aria-atomic="false"></div>
 
-<div id="toasts"></div>
-
-<!-- Injection des données Django → JS via json_script (safe, sans alerte IDE) -->
+<!--
+    Passage de données Django → JS via json_script (protection XSS intégrée).
+    Ces balises <script type="application/json"> sont lisibles via readJson() ci-dessous.
+-->
 {{ map_data_json|default:"{}"|json_script:"gd-map-data" }}
 {{ chart_routes_json|default:"{}"|json_script:"gd-chart-routes" }}
 {{ chart_floods_json|default:"{}"|json_script:"gd-chart-floods" }}
@@ -397,26 +424,507 @@
 {{ center_lng_json|json_script:"gd-center-lng" }}
 
 <script src="{% static 'dashboard/js/dashboard.js' %}"></script>
+
 <script>
-  function readJson(id, fallback) {
-    var el = document.getElementById(id);
-    if (!el) return fallback;
-    try { return JSON.parse(el.textContent); } catch (e) { return fallback; }
-  }
+    // Lecture sécurisée des blocs json_script de Django
+    function readJson(id, fallback) {
+        const el = document.getElementById(id);
+        if (!el) return fallback;
+        try {
+            return JSON.parse(el.textContent);
+        } catch (e) {
+            console.warn('[GéoDash] Impossible de parser #' + id);
+            return fallback;
+        }
+    }
 
-  var MAP_DATA     = readJson('gd-map-data',     {});
-  var CHART_ROUTES = readJson('gd-chart-routes', {});
-  var CHART_FLOODS = readJson('gd-chart-floods', {});
-  var AVG_SCORE    = readJson('gd-avg-score',      0);
-  var CENTER_LAT   = readJson('gd-center-lat',     0);
-  var CENTER_LNG   = readJson('gd-center-lng',     0);
+    const MAP_DATA     = readJson('gd-map-data',     {});
+    const CHART_ROUTES = readJson('gd-chart-routes', {});
+    const CHART_FLOODS = readJson('gd-chart-floods', {});
+    const AVG_SCORE    = readJson('gd-avg-score',      0);
+    const CENTER_LAT   = readJson('gd-center-lat',     0);
+    const CENTER_LNG   = readJson('gd-center-lng',     0);
 
-  document.addEventListener('DOMContentLoaded', function () {
-    initEventListeners();
-    initMap(CENTER_LAT, CENTER_LNG, MAP_DATA);
-    initCharts(CHART_ROUTES, CHART_FLOODS, AVG_SCORE);
-    setInterval(refreshAlerts, 60000);
-  });
+    document.addEventListener('DOMContentLoaded', function () {
+        initEventListeners();
+        initMap(CENTER_LAT, CENTER_LNG, MAP_DATA);
+        initCharts(CHART_ROUTES, CHART_FLOODS, AVG_SCORE);
+        setInterval(refreshAlerts, 60000);
+        initSettings();
+    });
 </script>
+
+<!-- Backdrop du drawer — un clic dessus ferme les Paramètres (voir closeSettings()) -->
+<div class="settings-backdrop" id="settingsBackdrop"></div>
+
+<!--
+    Drawer Paramètres — position:fixed, glisse depuis la droite.
+    aria-labelledby pointe sur le titre visible #sd-hdr-title pour les lecteurs d'écran.
+-->
+<div class="settings-drawer" id="settingsDrawer"
+     role="dialog"
+     aria-modal="true"
+     aria-labelledby="sd-hdr-title">
+
+    <!-- En-tête du drawer -->
+    <div class="sd-hdr">
+        <div class="sd-hdr-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l-.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+        </div>
+        <div>
+            <div class="sd-hdr-title" id="sd-hdr-title">Paramètres</div>
+            <div class="sd-hdr-sub">GéoDash v2.0</div>
+        </div>
+        <button type="button" class="sd-close" id="settingsClose" aria-label="Fermer les paramètres">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+                <line x1="18" y1="6" x2="6" y2="18"/>
+                <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+        </button>
+    </div>
+
+    <!-- Onglets de navigation interne du drawer -->
+    <div class="sd-tabs" role="tablist">
+        <button type="button" class="sd-tab active" role="tab" aria-selected="true" data-panel="sd-affichage">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="2" y="3" width="20" height="14" rx="2"/>
+                <polyline points="8 21 12 17 16 21"/>
+            </svg>
+            Affichage
+        </button>
+        <button type="button" class="sd-tab" role="tab" aria-selected="false" data-panel="sd-carte">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/>
+                <line x1="8" y1="2" x2="8" y2="18"/>
+                <line x1="16" y1="6" x2="16" y2="22"/>
+            </svg>
+            Carte
+        </button>
+        <button type="button" class="sd-tab" role="tab" aria-selected="false" data-panel="sd-alertes">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+            </svg>
+            Alertes
+        </button>
+        <button type="button" class="sd-tab" role="tab" aria-selected="false" data-panel="sd-compte">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                <circle cx="12" cy="7" r="4"/>
+            </svg>
+            Compte
+        </button>
+    </div>
+
+    <!-- Corps scrollable du drawer -->
+    <div class="sd-body">
+
+        <!-- Onglet Affichage -->
+        <div class="sd-panel active" id="sd-affichage" role="tabpanel">
+
+            <div class="sd-section">
+                <div class="sd-section-title">Interface</div>
+
+                <div class="sd-row">
+                    <div class="sd-row-icon blue">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="5"/>
+                            <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+                            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+                            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+                            <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+                        </svg>
+                    </div>
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Thème</div>
+                        <div class="sd-row-lbl-hint">Clair ou sombre — aussi accessible depuis le header</div>
+                    </div>
+                    <!--
+                        Classe themeBtns (et non densityBtns) pour bien séparer
+                        les deux groupes radio. initSettings() y attache un listener
+                        qui applique le thème immédiatement sans attendre la sauvegarde.
+                    -->
+                    <div class="sd-radio-group themeBtns" style="justify-content:flex-end">
+                        <button type="button" class="sd-radio-btn" data-val="light">Clair</button>
+                        <button type="button" class="sd-radio-btn" data-val="dark">Sombre</button>
+                    </div>
+                </div>
+
+                <div class="sd-row">
+                    <div class="sd-row-icon purple">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <line x1="21" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/>
+                            <line x1="21" y1="14" x2="3" y2="14"/><line x1="21" y1="18" x2="3" y2="18"/>
+                        </svg>
+                    </div>
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Densité de l'interface</div>
+                        <div class="sd-row-lbl-hint">Espacement entre les éléments UI</div>
+                    </div>
+                    <div class="sd-radio-group densityBtns">
+                        <button type="button" class="sd-radio-btn" data-val="compact">Compact</button>
+                        <button type="button" class="sd-radio-btn active" data-val="normal">Normal</button>
+                        <button type="button" class="sd-radio-btn" data-val="comfortable">Large</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="sd-section sd-mt">
+                <div class="sd-section-title">Localisation</div>
+
+                <div class="sd-row">
+                    <div class="sd-row-icon teal">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="10"/>
+                            <line x1="2" y1="12" x2="22" y2="12"/>
+                            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                        </svg>
+                    </div>
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Langue de l'interface</div>
+                        <div class="sd-row-lbl-hint">Labels de navigation et libellés</div>
+                    </div>
+                    <div class="sd-radio-group langBtns">
+                        <button type="button" class="sd-radio-btn active" data-val="fr">🇫🇷 FR</button>
+                        <button type="button" class="sd-radio-btn" data-val="en">🇬🇧 EN</button>
+                    </div>
+                </div>
+
+                <div class="sd-row">
+                    <div class="sd-row-icon orange">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="10"/>
+                            <polyline points="12 6 12 12 16 14"/>
+                        </svg>
+                    </div>
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Format des coordonnées</div>
+                        <div class="sd-row-lbl-hint">Degrés décimaux ou degrés/minutes/secondes</div>
+                    </div>
+                    <div class="sd-radio-group coordFmtBtns">
+                        <button type="button" class="sd-radio-btn active" data-val="DD">DD</button>
+                        <button type="button" class="sd-radio-btn" data-val="DMS">DMS</button>
+                    </div>
+                </div>
+            </div>
+        </div>{# fin onglet Affichage #}
+
+        <!-- Onglet Carte -->
+        <div class="sd-panel" id="sd-carte" role="tabpanel">
+
+            <div class="sd-section">
+                <div class="sd-section-title">Fond de carte</div>
+            </div>
+
+            <!-- Grille de sélection du fond de carte — 4 options fiables (CartoDB {r} retiré dans dashboard.js) -->
+            <div class="sd-tile-grid">
+                <div class="sd-tile-opt active" data-tile="dark">
+                    <div class="sd-tile-preview dark-tiles"></div>
+                    <div class="sd-tile-label">CartoDB Sombre</div>
+                </div>
+                <div class="sd-tile-opt" data-tile="light">
+                    <div class="sd-tile-preview light-tiles"></div>
+                    <div class="sd-tile-label">CartoDB Clair</div>
+                </div>
+                <div class="sd-tile-opt" data-tile="osm">
+                    <div class="sd-tile-preview osm-tiles"></div>
+                    <div class="sd-tile-label">OpenStreetMap</div>
+                </div>
+                <div class="sd-tile-opt" data-tile="topo">
+                    <div class="sd-tile-preview topo-tiles"></div>
+                    <div class="sd-tile-label">Topographique</div>
+                </div>
+            </div>
+
+            <div class="sd-divider"></div>
+
+            <div class="sd-section sd-mt">
+                <div class="sd-section-title">Options de la carte</div>
+
+                <div class="sd-row">
+                    <div class="sd-row-icon blue">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <circle cx="11" cy="11" r="8"/>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                            <line x1="11" y1="8" x2="11" y2="14"/>
+                            <line x1="8" y1="11" x2="14" y2="11"/>
+                        </svg>
+                    </div>
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Zoom par défaut</div>
+                        <div class="sd-row-lbl-hint">Niveau au chargement de la carte</div>
+                    </div>
+                    <div class="sd-slider-wrap">
+                        <input type="range" class="sd-slider" id="zoomSlider" data-val-target="zoomVal"
+                               min="7" max="14" value="9" style="--pct:40%"
+                               aria-label="Niveau de zoom par défaut">
+                        <span class="sd-slider-val" id="zoomVal">9</span>
+                    </div>
+                </div>
+
+                <div class="sd-row">
+                    <div class="sd-row-icon green">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                        </svg>
+                    </div>
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Afficher l'échelle</div>
+                        <div class="sd-row-lbl-hint">Barre d'échelle en bas à gauche</div>
+                    </div>
+                    <label class="sd-toggle">
+                        <input type="checkbox" id="showScaleToggle" checked aria-label="Afficher la barre d'échelle">
+                        <span class="sd-toggle-track"></span>
+                    </label>
+                </div>
+
+                <div class="sd-row">
+                    <div class="sd-row-icon orange">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                            <polyline points="2 17 12 22 22 17"/>
+                            <polyline points="2 12 12 17 22 12"/>
+                        </svg>
+                    </div>
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Afficher la légende</div>
+                        <div class="sd-row-lbl-hint">Panneau légende en haut à droite de la carte</div>
+                    </div>
+                    <label class="sd-toggle">
+                        <input type="checkbox" id="showLegendToggle" checked aria-label="Afficher la légende de la carte">
+                        <span class="sd-toggle-track"></span>
+                    </label>
+                </div>
+            </div>
+        </div>{# fin onglet Carte #}
+
+        <!-- Onglet Alertes & Données -->
+        <div class="sd-panel" id="sd-alertes" role="tabpanel">
+
+            <div class="sd-section">
+                <div class="sd-section-title">Actualisation des données</div>
+
+                <div class="sd-row">
+                    <div class="sd-row-icon blue">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <polyline points="23 4 23 10 17 10"/>
+                            <polyline points="1 20 1 14 7 14"/>
+                            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                        </svg>
+                    </div>
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Intervalle de rafraîchissement</div>
+                        <div class="sd-row-lbl-hint">Fréquence de mise à jour des alertes</div>
+                    </div>
+                    <select class="sd-select" id="refreshSelect" aria-label="Intervalle de rafraîchissement">
+                        <option value="30">30 s</option>
+                        <option value="60" selected>1 min</option>
+                        <option value="300">5 min</option>
+                        <option value="600">10 min</option>
+                        <option value="0">Désactivé</option>
+                    </select>
+                </div>
+
+                <div class="sd-row">
+                    <div class="sd-row-icon teal">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/>
+                            <line x1="8" y1="18" x2="21" y2="18"/>
+                            <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/>
+                            <line x1="3" y1="18" x2="3.01" y2="18"/>
+                        </svg>
+                    </div>
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Seuil minimum d'affichage</div>
+                        <div class="sd-row-lbl-hint">Filtrer les alertes sous ce niveau</div>
+                    </div>
+                    <select class="sd-select" id="alertLevelSelect" aria-label="Niveau minimum des alertes affichées">
+                        <option value="info" selected>Info</option>
+                        <option value="warning">Avertissement</option>
+                        <option value="danger">Danger</option>
+                        <option value="critical">Critique</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="sd-section sd-mt">
+                <div class="sd-section-title">Notifications</div>
+
+                <div class="sd-row">
+                    <div class="sd-row-icon orange">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                            <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+                            <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                        </svg>
+                    </div>
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Alertes sonores</div>
+                        <div class="sd-row-lbl-hint">Émettre un son pour les nouvelles alertes critiques</div>
+                    </div>
+                    <label class="sd-toggle">
+                        <input type="checkbox" id="soundAlertToggle" aria-label="Activer les alertes sonores">
+                        <span class="sd-toggle-track"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="sd-section sd-mt">
+                <div class="sd-section-title">Export des données</div>
+
+                <div class="sd-row">
+                    <div class="sd-row-icon green">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="7 10 12 15 17 10"/>
+                            <line x1="12" y1="15" x2="12" y2="3"/>
+                        </svg>
+                    </div>
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Exporter les alertes actives</div>
+                        <div class="sd-row-lbl-hint">Télécharger en CSV</div>
+                    </div>
+                    <a href="/api/alerts/export/?fmt=csv" class="sd-btn-reset" style="text-decoration:none;padding:6px 12px;font-size:11px">CSV</a>
+                </div>
+
+                <div class="sd-row">
+                    <div class="sd-row-icon blue">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="7 10 12 15 17 10"/>
+                            <line x1="12" y1="15" x2="12" y2="3"/>
+                        </svg>
+                    </div>
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Exporter les données routes</div>
+                        <div class="sd-row-lbl-hint">Télécharger en GeoJSON</div>
+                    </div>
+                    <a href="/api/roads/export/?fmt=geojson" class="sd-btn-reset" style="text-decoration:none;padding:6px 12px;font-size:11px">GeoJSON</a>
+                </div>
+            </div>
+        </div>{# fin onglet Alertes #}
+
+        <!-- Onglet Compte -->
+        <div class="sd-panel" id="sd-compte" role="tabpanel">
+
+            <!-- Carte identité utilisateur Django -->
+            <div class="sd-user-card">
+                <div class="sd-avatar">{{ request.user.get_initials|default:"GD" }}</div>
+                <div>
+                    <div class="sd-user-name">
+                        {{ request.user.get_full_name|default:request.user.username|default:"Administrateur" }}
+                    </div>
+                    <div class="sd-user-role">
+                        {% if request.user.is_superuser %}Super Admin
+                        {% elif request.user.is_staff %}Analyste
+                        {% else %}Observateur{% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <div class="sd-section sd-mt">
+                <div class="sd-section-title">Profil</div>
+
+                <div class="sd-row">
+                    <div class="sd-row-icon blue">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                            <circle cx="12" cy="7" r="4"/>
+                        </svg>
+                    </div>
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Nom d'utilisateur</div>
+                    </div>
+                    <span class="sd-badge">{{ request.user.username|default:"admin" }}</span>
+                </div>
+
+                <div class="sd-row">
+                    <div class="sd-row-icon green">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+                            <polyline points="22,6 12,13 2,6"/>
+                        </svg>
+                    </div>
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Adresse e-mail</div>
+                    </div>
+                    <span class="sd-badge green">{{ request.user.email|default:"—" }}</span>
+                </div>
+
+                <div class="sd-row">
+                    <div class="sd-row-icon teal">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                        </svg>
+                    </div>
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Modifier le mot de passe</div>
+                        <div class="sd-row-lbl-hint">Accéder à la page de modification</div>
+                    </div>
+                    <a href="/accounts/password_change/" class="sd-btn-reset" style="text-decoration:none;padding:6px 12px;font-size:11px">Modifier</a>
+                </div>
+            </div>
+
+            <div class="sd-section sd-mt">
+                <div class="sd-section-title">Session</div>
+
+                <div class="sd-row">
+                    <div class="sd-row-icon orange">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                            <polyline points="16 17 21 12 16 7"/>
+                            <line x1="21" y1="12" x2="9" y2="12"/>
+                        </svg>
+                    </div>
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Version de l'application</div>
+                    </div>
+                    <span class="sd-badge">v2.0.0</span>
+                </div>
+            </div>
+
+            <div class="sd-divider sd-mt"></div>
+
+            <!-- Zone critique — actions irréversibles, clairement séparées visuellement -->
+            <div class="sd-mt">
+                <div class="sd-danger-zone">
+                    <div class="sd-danger-hdr">Zone critique</div>
+
+                    <div class="sd-danger-row">
+                        <div>
+                            <div class="sd-danger-row-lbl">Vider le cache local</div>
+                            <div class="sd-danger-row-hint">Supprime les préférences enregistrées</div>
+                        </div>
+                        <button type="button" class="sd-danger-btn" id="clearCacheBtn">
+                            Vider
+                        </button>
+                    </div>
+
+                    <div class="sd-danger-row">
+                        <div>
+                            <div class="sd-danger-row-lbl">Se déconnecter</div>
+                            <div class="sd-danger-row-hint">Fermer la session en cours</div>
+                        </div>
+                        <a href="/accounts/logout/" class="sd-danger-btn" style="text-decoration:none">Quitter</a>
+                    </div>
+                </div>
+            </div>
+
+        </div>{# fin onglet Compte #}
+
+    </div>{# fin sd-body #}
+
+    <!-- Pied du drawer — Sauvegarder applique + ferme, Réinitialiser remet les défauts -->
+    <div class="sd-footer">
+        <button type="button" class="sd-btn-save" id="settingsSave">Enregistrer les paramètres</button>
+        <button type="button" class="sd-btn-reset" id="settingsReset">Réinitialiser</button>
+    </div>
+
+</div>{# fin .settings-drawer #}
+
 </body>
 </html>
