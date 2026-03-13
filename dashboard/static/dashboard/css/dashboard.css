@@ -1,14 +1,21 @@
-/* ═══════════════════════════════════════════════════════════
-   GÉODASH — dashboard.css
-   Thème : Light (défaut) + Dark Mode
-   Typographie : DM Sans (UI) + DM Mono (données)
-═══════════════════════════════════════════════════════════ */
+/**
+ * GéoDash Dashboard Stylesheet
+ * 
+ * Main themes: Light (default) and dark mode
+ * Typography: DM Sans for UI, DM Mono for data displays
+ * Responsive: Mobile-first with CSS variables for layout dimensions
+ * Browser support: Modern browsers with CSS Grid, Flexbox, custom properties
+ */
 
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&display=swap');
 
-/* ══════════════════════════════════════════════════════════
-   VARIABLES — THÈME CLAIR
-══════════════════════════════════════════════════════════ */
+/* Light theme color palette
+ * Backgrounds span from page (#eef0f7) to cards (#ffffff)
+ * Text colors range from primary (#1a2035) to tertiary (#8892aa)
+ * Colors for semantic feedback: green (health), orange (warning), blue (info), red (danger)
+ * Shadows (--sh0 to --sh3) provide depth hierarchy
+ * Layout dimensions are CSS variables to enable responsive scaling
+ */
 :root,
 [data-theme="light"] {
   --bg-page:    #eef0f7;
@@ -65,9 +72,12 @@
   --charts-h: clamp(140px, 18vh, 200px);
 }
 
-/* ══════════════════════════════════════════════════════════
-   VARIABLES — THÈME SOMBRE
-══════════════════════════════════════════════════════════ */
+/* Dark theme color palette
+ * Inverted semantics: light text (#e2e8f5) on dark backgrounds (#0f1117)
+ * Shadows use black with higher opacity for contrast
+ * Semantic colors (green/orange/blue) adjusted for reduced eye strain
+ * Tile filter transforms map rendering for night-friendly appearance
+ */
 [data-theme="dark"] {
   --bg-page:    #0f1117;
   --bg-card:    #171d2b;
@@ -116,9 +126,11 @@
   --popup-tip: #1a2235;
 }
 
-/* ══════════════════════════════════════════════════════════
-   TRANSITION THÈME
-══════════════════════════════════════════════════════════ */
+/* Smooth color transitions during theme toggle
+ * Affects background, border, text color, and shadows
+ * Duration: 300ms with ease timing for perceived quality
+ * Applied during .theme-transitioning class lifetime (see dashboard.js)
+ */
 .theme-transitioning,
 .theme-transitioning *,
 .theme-transitioning *::before,
@@ -130,9 +142,11 @@
     box-shadow .3s ease !important;
 }
 
-/* ══════════════════════════════════════════════════════════
-   RESET
-══════════════════════════════════════════════════════════ */
+/* CSS reset: Box-sizing, margins, padding
+ * Scroll styling: Custom scrollbar for consistent brand experience across browsers
+ * Font smoothing: Antialiased rendering for crisp typography
+ * Body flex layout: Foundation for sticky header + flexible content area
+ */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html { height: 100%; }
 
@@ -158,9 +172,13 @@ a { text-decoration: none; color: inherit; }
 ::-webkit-scrollbar-thumb { background: var(--b2); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--b3); }
 
-/* ══════════════════════════════════════════════════════════
-   ANIMATIONS
-══════════════════════════════════════════════════════════ */
+/* Define all animations used in the dashboard
+ * rippleAnim: Material Design ripple effect on button clicks (55ms)
+ * spin: Continuous rotation (loading indicators)
+ * livepulse: Pulse ring for live status indicator (2.2s loop)
+ * alertIn/toastIn: Entrance animations for notifications
+ * ripple-wave: Dynamically created during click events, removed after animation
+ */
 @keyframes rippleAnim {
   from { transform: scale(0); opacity: 1; }
   to   { transform: scale(4); opacity: 0; }
@@ -186,9 +204,12 @@ a { text-decoration: none; color: inherit; }
 }
 [data-theme="dark"] .ripple-wave { background: rgba(91,141,238,.28); }
 
-/* ══════════════════════════════════════════════════════════
-   HEADER
-══════════════════════════════════════════════════════════ */
+/* Header container with sticky positioning
+ * Contains: logo, zone title, zone selector, status, theme toggle, alerts
+ * Height: --hdr-h variable (64px) for consistency
+ * Shadow/border: Subtle depth to separate from content area
+ * Flex layout: Left-align logo, center title, right-align controls
+ */
 .hdr {
   height: var(--hdr-h);
   background: var(--bg-card);
@@ -330,9 +351,12 @@ a { text-decoration: none; color: inherit; }
   overflow: hidden;
 }
 
-/* ══════════════════════════════════════════════════════════
-   NAV GAUCHE
-══════════════════════════════════════════════════════════ */
+/* Left sidebar navigation
+ * Contains layer toggles (Roads, Floods, Vegetation) and settings access
+ * Scrollable if content exceeds available height
+ * Active state indicator: left border bar with blue accent
+ * Hover effects: translate right (micro-interaction feedback)
+ */
 .nav-left {
   grid-area: nav;
   background: var(--bg-sidebar);
@@ -375,9 +399,12 @@ a { text-decoration: none; color: inherit; }
 .nav-spacer  { flex: 1; }
 .nav-divider { height: 1px; background: var(--b1); margin: 6px 0; flex-shrink: 0; }
 
-/* ══════════════════════════════════════════════════════════
-   ZONE CARTE
-══════════════════════════════════════════════════════════ */
+/* Map container with Leaflet integration
+ * Absolute positioning for Leaflet (#map) to fill the entire grid cell
+ * Toolbar buttons (top-center) for layer filtering with glassmorphism effect
+ * Legend (top-right) with semantic color indicators
+ * Overlay (loading state) with spinner and blur backdrop
+ */
 .map-area {
   grid-area: map;
   position: relative;
@@ -607,12 +634,12 @@ a { text-decoration: none; color: inherit; }
 .badge-ferme    { background: var(--bg-input); color: var(--t3); border: 1px solid var(--b2); }
 .badge-dot      { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
 
-/* ══════════════════════════════════════════════════════════
-   MARQUEUR PULSANT — zone d'alerte (focusAlert)
-   ─────────────────────────────────────────────────────────
-   Icône DIV Leaflet composée d'un anneau pulsant + un point.
-   La couleur vient de --mc (CSS custom property inline).
-══════════════════════════════════════════════════════════ */
+/* Pulsing alert marker on map
+ * Composed of: animated rings (scale + fade out) + center dot with white border
+ * Color passed via inline CSS variable --mc (from dashboard.js)
+ * Animation: scale out over 1.8s with stagger effect (dual ripple appearance)
+ * Used by focusAlert() to highlight specific areas on the map
+ */
 .alert-pulse-marker {
   position: relative;
   width: 36px; height: 36px;
@@ -643,12 +670,12 @@ a { text-decoration: none; color: inherit; }
   100% { opacity: 0; }
 }
 
-/* ══════════════════════════════════════════════════════════
-   ALERTE ITEM — survol + état actif
-   ─────────────────────────────────────────────────────────
-   Les items dans le panel droit deviennent cliquables avec
-   un curseur pointer explicite et un highlight au clic.
-══════════════════════════════════════════════════════════ */
+/* Alert list item interaction states
+ * Hover: background color change + subtle rightward translate for visual feedback
+ * Click: scale down slightly to indicate press
+ * Focused: blue border, highlight background, and shadow for prominence
+ * Used to show active alert selection in the alerts list
+ */
 .a-item {
   cursor: pointer;
   transition: background .15s, transform .12s, box-shadow .15s;
@@ -664,22 +691,12 @@ a { text-decoration: none; color: inherit; }
   background: var(--blue-bg);
 }
 
-/* ══════════════════════════════════════════════════════════
-   PANEL DROIT — ARCHITECTURE CORRIGÉE
-   ────────────────────────────────────────────────────────
-   AVANT (bugué) :
-     panel-mid  → max-height: 65%
-     alerts-sec → max-height: 45%
-     Total possible : 110% → impossible → débordement
-
-   APRÈS (correct) :
-     panel-hdr  → flex-shrink:0  (entête fixe)
-     panel-body → flex:1, overflow-y:auto  (UNE SEULE zone scroll)
-       kpi-grid, layers-sec, alerts-sec → flow naturel dedans
-
-   Le panel ne peut jamais dépasser sa cellule grid.
-   Tout le contenu est accessible par scroll.
-══════════════════════════════════════════════════════════ */
+/* Right panel: fixed layout with dedicated scroll area
+ * Architecture fix: panel-hdr (sticky) + panel-body (scrollable flex container)
+ * Previous bug: max-height on sub-sections (65%+45%) caused overflow
+ * Solution: single panel-body with overflow-y:auto handles all scrolling
+ * Contains: KPI cards, layer toggles, active alerts list
+ */
 .panel-right {
   grid-area: panel;
   background: var(--bg-sidebar);
@@ -708,7 +725,12 @@ a { text-decoration: none; color: inherit; }
   flex-direction: column;
 }
 
-/* KPI Cards */
+/* Key Performance Indicators cards
+ * Display zone health (roads, floods, vegetation) with color-coded scores
+ * Hover state: bottom border accent animation + icon scale + depth shadow
+ * Score colors: green (>70%), orange (40-69%), red (<40%)
+ * Progress bar animated on data update (1.4s ease-out cubic)
+ */
 .kpi-grid { display: flex; flex-direction: column; gap: 7px; padding: 10px 10px 4px; flex-shrink: 0; }
 
 .kpi-card {
@@ -853,10 +875,12 @@ a { text-decoration: none; color: inherit; }
 }
 .a-empty svg { opacity: .3; color: var(--green2); }
 
-/* ══════════════════════════════════════════════════════════
-   GRAPHIQUES
-   --charts-h = clamp(140px, 18vh, 200px) → jamais fixe
-══════════════════════════════════════════════════════════ */
+/* Charts bar: responsive chart container
+ * Grid area for bar chart (routes), doughnut (floods), and gauge (global score)
+ * Height: --charts-h with clamp() for responsive scaling (140px–200px)
+ * Each chart pane uses flexbox with overflow:hidden to contain canvas elements
+ * Score pane fixed width (180–230px) prevents unnecessary compression of data charts
+ */
 .charts-bar {
   grid-area: charts;
   background: var(--bg-card);
@@ -912,9 +936,11 @@ a { text-decoration: none; color: inherit; }
 .sm-key      { color: var(--t3); min-width: 46px; font-size: 10px; font-weight: 600; }
 .sm-cnt      { font-family: 'DM Mono', monospace; font-size: 11px; font-weight: 500; color: var(--blue); margin-top: 4px; }
 
-/* ══════════════════════════════════════════════════════════
-   TOASTS
-══════════════════════════════════════════════════════════ */
+/* Temporary notification toasts
+ * Fixed container positioned 16px from bottom-right, adjusting for panel width
+ * Flex column with 6px gap, initially no pointer events (toasts are non-interactive)
+ * Max width 250px to avoid excessive stretching on large displays
+ */
 #toasts {
   position: fixed; bottom: 16px; right: calc(var(--panel-w) + 12px); z-index: 9999;
   display: flex; flex-direction: column; gap: 6px; pointer-events: none;
@@ -931,17 +957,17 @@ a { text-decoration: none; color: inherit; }
 .toast.err { border-left: 3px solid var(--orange); }
 .toast.nfo { border-left: 3px solid var(--blue); }
 
-/* ══════════════════════════════════════════════════════════
-   RESPONSIVE
-   Stratégie :
-   ≥ 1400px → 3 colonnes pleines
-   1100–1399 → nav + panel légèrement réduits
-   900–1099  → nav icônes seules, panel réduit
-   700–899   → panel masqué
-   < 700     → nav icônes compactes
-   < 500     → nav masquée, layout 1 col
-   < 420     → charts masqués
-══════════════════════════════════════════════════════════ */
+/* Responsive breakpoint strategy
+ * Layout scales through 7 major breakpoints, adapting nav width and panel visibility:
+ * 1600px+: Full 3-column layout with max widths (240px nav, 300px panel)
+ * 1400px: Slightly compressed widths (200px nav, 260px panel)
+ * 1100px: Nav collapses to icons-only (56px), panel visible but narrower
+ * 900px: Panel hidden, nav stays icon-only
+ * 700px: Further optimization, nav becomes super compact
+ * 500px: Nav hidden, full-width map, charts below in single column
+ * 420px: Minimal mobile layout, charts hidden due to space constraints
+ * Touch devices get 44px minimum hit targets for accessibility
+ */
 
 @media (min-width: 1600px) {
   :root { --nav-w: 240px; --panel-w: 300px; }
@@ -1028,13 +1054,12 @@ a { text-decoration: none; color: inherit; }
   .mb { padding: 8px 14px; }
 }
 
-/* ══════════════════════════════════════════════════════════
-   PANNEAU PARAMÈTRES
-   ─────────────────────────────────────────────────────────
-   Drawer fixe qui glisse depuis la droite (z-index 600).
-   Backdrop semi-transparent pour fermeture au clic.
-   4 sections : Affichage, Carte, Alertes & Données, Compte.
-══════════════════════════════════════════════════════════ */
+/* Settings drawer panel (modal)
+ * Slides in from right with overlay backdrop for focus
+ * Z-index 600 ensures visibility above all other elements
+ * 4 tabs: Display, Map, Alerts & Data, Account
+ * Keyboard accessible: Escape closes drawer (handled by dashboard.js)
+ */
 
 /* Backdrop */
 .settings-backdrop {
