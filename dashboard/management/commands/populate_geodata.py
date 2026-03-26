@@ -3,15 +3,28 @@ populate_geodata.py — GéoDash
 Importe les données géospatiales depuis OpenStreetMap via l'API Overpass.
 
 Optimisation principale : une seule requête Overpass par zone qui récupère
-routes + eau + végétation en même temps. Avant on faisait 3 requêtes séparées
-et la 3e se faisait throttler quasi systématiquement.
+routes + eau + végétation en même temps.
+
+Améliorations v2 :
+  - Clé unique par osm_id (plus de collisions sur les noms)
+  - Suppression automatique des éléments disparus d'OSM
+  - Gestion d'erreur par élément (un échec ne plante pas tout)
+  - Factorisation DRY des 3 fonctions save_*
+  - Fermeture automatique des polygones
+  - Backoff adaptatif + rotation d'instances Overpass
+
+PRÉREQUIS : ajouter osm_id aux modèles avant d'utiliser ce fichier.
+  Voir models_patch.py (livré avec ce fichier) et lancer :
+    python manage.py makemigrations
+    python manage.py migrate
+    python manage.py populate_geodata --clear   # réimport complet
 
 Usage :
     python manage.py populate_geodata                  # toutes les zones CI
     python manage.py populate_geodata --zone MAN       # une seule ville
-    python manage.py populate_geodata --dry-run        # pour voir sans toucher la base
+    python manage.py populate_geodata --dry-run        # voir sans écrire
     python manage.py populate_geodata --clear          # repart de zéro
-    python manage.py populate_geodata --roads-only     # routes uniquement, plus rapide
+    python manage.py populate_geodata --roads-only     # routes uniquement
 """
 
 import logging
@@ -29,24 +42,27 @@ from dashboard.models import Alert, FloodRisk, RoadSegment, VegetationDensity, Z
 logger = logging.getLogger(__name__)
 
 
-# ─── Config ───────────────────────────────────────────────────────────────────
-# OVERPASS_URL peut être surchargé en prod si on veut pointer vers un miroir
-# plus proche (ex: overpass.kumi.systems pour l'Afrique de l'Ouest)
+# ─── Config Overpass ──────────────────────────────────────────────────────────
 
-OVERPASS_URL     = os.environ.get("OVERPASS_URL", "https://overpass-api.de/api/interpreter")
-OVERPASS_TIMEOUT = 90     # en secondes — requête fusionnée = plus lourde qu'une simple
-REQUEST_DELAY    = 4.0    # délai entre zones, respecter le fair-use Overpass
+OVERPASS_INSTANCES = [
+    os.environ.get("OVERPASS_URL", "https://overpass-api.de/api/interpreter"),
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+]
+_overpass_instance_index = 0
+
+OVERPASS_TIMEOUT = 90
+REQUEST_DELAY    = 12.0
 MAX_RETRIES      = 3
-RETRY_DELAY      = 15.0   # on attend plus longtemps si le serveur est surchargé
-SEARCH_RADIUS    = 0.05   # ~5 km autour du centre ville, suffisant pour les agglomérations
-MAX_ELEMENTS     = 500    # au-delà de 500 éléments par type, ça ralentit beaucoup
+RETRY_DELAY      = 15.0
+SEARCH_RADIUS    = 0.05
+MAX_ELEMENTS     = 500
+
+_consecutive_429 = 0
+_MAX_GLOBAL_WAIT = 300
 
 
 # ─── Villes de Côte d'Ivoire ──────────────────────────────────────────────────
-# Couverture exhaustive : 31 régions + 2 districts autonomes, tous les chefs-lieux
-# de département et les principales sous-préfectures.
-# Format : (nom affiché, code unique, latitude, longitude, description)
-# Les coordonnées des petites localités sont approximatives (centre OSM).
 
 COTE_IVOIRE_VILLES = [
 
@@ -195,7 +211,7 @@ COTE_IVOIRE_VILLES = [
     # ── Région du Bafing ──────────────────────────────────────────────────────
     ("Touba",             "TBA",   8.2833,  -7.6833, "Chef-lieu du Bafing"),
     ("Ouaninou",          "OUA",   8.0333,  -7.9000, "Sous-préfecture du Bafing"),
-    ("Koro",              "KRB",   8.4333,  -7.5167, "Sous-préfecture du Bafing"),  # différent de Koro Worodougou
+    ("Koro",              "KRB",   8.4333,  -7.5167, "Sous-préfecture du Bafing"),
     ("Bogolo",            "BGL",   8.6667,  -7.2333, "Sous-préfecture du Bafing"),
 
     # ── Région du Kabadougou ──────────────────────────────────────────────────
@@ -279,10 +295,9 @@ COTE_IVOIRE_VILLES = [
     ("Toulepleu",         "TLP",   6.5833,  -8.4000, "Frontière avec le Liberia"),
     ("Logoualé",          "LGL",   7.1167,  -7.7167, "Sous-préfecture du Tonkpi"),
     ("Bin-Houyé",         "BNH",   7.2833,  -7.8333, "Sous-préfecture du Tonkpi"),
-
 ]
 
-# Déduplication automatique sur le code — sécurité si une ville apparaît deux fois
+# Déduplication sur le code
 _seen_codes = set()
 _deduped    = []
 for _entry in COTE_IVOIRE_VILLES:
@@ -293,8 +308,6 @@ COTE_IVOIRE_VILLES = _deduped
 
 
 # ─── Mapping OSM → champs Django ──────────────────────────────────────────────
-# Ces dicts évitent une cascade de if/elif dans les fonctions de parsing.
-# Ajouter un nouveau type de surface ici suffit, pas besoin de toucher ailleurs.
 
 OSM_SURFACE_MAP = {
     "asphalt": "bitume", "paved": "bitume", "concrete": "bitume",
@@ -303,7 +316,6 @@ OSM_SURFACE_MAP = {
     "gravel": "gravier", "fine_gravel": "gravier", "compacted": "gravier",
 }
 
-# Fallback quand le tag "surface" est absent : on déduit depuis le type de route
 HIGHWAY_SURFACE_FALLBACK = {
     "motorway": "bitume", "trunk": "bitume", "primary": "bitume",
     "secondary": "bitume", "tertiary": "bitume", "residential": "bitume",
@@ -311,8 +323,6 @@ HIGHWAY_SURFACE_FALLBACK = {
     "path": "terre", "footway": "terre",
 }
 
-# Score de base par type de route — calibré pour les routes ivoiriennes
-# (une "primary" en CI n'est pas au même niveau qu'une "primary" en France)
 HIGHWAY_BASE_SCORE = {
     "motorway": 88, "trunk": 82, "primary": 75, "secondary": 65,
     "tertiary": 55, "residential": 58, "service": 52,
@@ -327,20 +337,16 @@ HIGHWAY_LABEL = {
     "path": "Chemin", "footway": "Sentier", "service": "Voie de service",
 }
 
-# Ajustement du score selon l'état de surface déclaré par les contributeurs OSM
 SMOOTHNESS_DELTA = {
     "excellent": +15, "good": +8, "intermediate": 0,
     "bad": -15, "very_bad": -25, "horrible": -35, "impassable": -50,
 }
 
-# Plages de score pour les zones à risque d'inondation, par type d'élément hydrologique
 FLOOD_SCORE_RANGE = {
     "river": (60, 85), "canal": (55, 78), "stream": (35, 60),
     "wetland": (42, 72), "water": (25, 55),
 }
 
-# Plages NDVI réalistes pour la zone tropicale de CI
-# Source : valeurs typiques Sentinel-2 en Afrique de l'Ouest
 NDVI_RANGE = {
     "forest": (0.62, 0.88), "wood": (0.60, 0.86),
     "orchard": (0.48, 0.72), "grass": (0.28, 0.55),
@@ -349,7 +355,6 @@ NDVI_RANGE = {
     "farmland": (0.15, 0.40),
 }
 
-# Tags Overpass — séparés par | pour la syntaxe regex Overpass
 HIGHWAY_TAGS        = "motorway|trunk|primary|secondary|tertiary|residential|unclassified|track"
 WATER_NATURAL_TAGS  = "wetland|water"
 WATER_WAY_TAGS      = "river|stream|canal"
@@ -360,12 +365,10 @@ NATURAL_VEG_TAGS    = "wood|scrub|grassland|heath"
 # ─── Helpers géographiques ────────────────────────────────────────────────────
 
 def make_bbox(lat: float, lng: float, r: float = SEARCH_RADIUS) -> str:
-    # Overpass attend le bbox en (sud, ouest, nord, est)
     return f"{lat - r},{lng - r},{lat + r},{lng + r}"
 
 
 def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
-    # Formule haversine pour estimer la surface d'une zone flood en km²
     R = 6371.0
     dlat = math.radians(lat2 - lat1)
     dlng = math.radians(lng2 - lng1)
@@ -384,7 +387,6 @@ def surface_from_tags(highway: str, tags: dict) -> str:
 def score_from_tags(highway: str, tags: dict) -> int:
     score = HIGHWAY_BASE_SCORE.get(highway, 40)
     score += SMOOTHNESS_DELTA.get(tags.get("smoothness", ""), 0)
-    # Bonus/malus selon la présence du tag surface
     if tags.get("surface") in ("paved", "asphalt", "concrete"):
         score = max(score, 55)
     elif tags.get("surface") in ("unpaved", "dirt", "mud"):
@@ -406,11 +408,52 @@ def ndvi_to_density(ndvi: float) -> str:
     return "very_dense"
 
 
-# ─── Requête Overpass fusionnée ───────────────────────────────────────────────
-# Une seule requête au lieu de 3 = pas de throttling sur la troisième.
-# Le retry avec délai croissant gère les pics de charge du serveur public.
+def _close_polygon(coords: list) -> list:
+    """Ferme un anneau de polygone si le premier et le dernier point diffèrent."""
+    if coords and coords[0] != coords[-1]:
+        return coords + [coords[0]]
+    return coords
+
+
+def _polygon_area_km2(geometry: list) -> float:
+    """
+    Approximation de l'aire réelle d'un polygone OSM via la formule de Shoelace
+    projetée en coordonnées métriques (approximation plate valide sur de petites surfaces).
+    Beaucoup plus précis que haversine(bbox) * 0.5 pour les formes irrégulières.
+    """
+    if len(geometry) < 3:
+        return 0.0
+    # Centroïde pour la projection locale
+    lat0 = sum(p["lat"] for p in geometry) / len(geometry)
+    cos_lat = math.cos(math.radians(lat0))
+    # Conversion degrés → mètres (approximation locale)
+    R = 6_371_000.0
+    pts = [
+        (math.radians(p["lon"]) * R * cos_lat,
+         math.radians(p["lat"]) * R)
+        for p in geometry
+    ]
+    # Formule de Shoelace
+    n = len(pts)
+    area = 0.0
+    for i in range(n):
+        j = (i + 1) % n
+        area += pts[i][0] * pts[j][1]
+        area -= pts[j][0] * pts[i][1]
+    return round(abs(area) / 2.0 / 1_000_000, 4)  # m² → km²
+
+
+# ─── Overpass : rotation d'instances et backoff adaptatif ─────────────────────
+
+def _next_overpass_instance() -> str:
+    global _overpass_instance_index
+    _overpass_instance_index = (_overpass_instance_index + 1) % len(OVERPASS_INSTANCES)
+    return OVERPASS_INSTANCES[_overpass_instance_index]
+
 
 def overpass_fetch(zone_bbox: str, roads_only: bool, stdout) -> dict | None:
+    global _consecutive_429
+
     if roads_only:
         query = f"""
         [out:json][timeout:{OVERPASS_TIMEOUT}][maxsize:100000000];
@@ -433,9 +476,10 @@ def overpass_fetch(zone_bbox: str, roads_only: bool, stdout) -> dict | None:
         """
 
     for attempt in range(1, MAX_RETRIES + 1):
+        url = OVERPASS_INSTANCES[_overpass_instance_index]
         try:
             resp = requests.post(
-                OVERPASS_URL,
+                url,
                 data={"data": query},
                 timeout=OVERPASS_TIMEOUT,
                 headers={"User-Agent": "GéoDash/1.0 (contact@geodash-ci.example.com)"},
@@ -446,44 +490,77 @@ def overpass_fetch(zone_bbox: str, roads_only: bool, stdout) -> dict | None:
             if "remark" in data and "error" in data.get("remark", "").lower():
                 raise ValueError(f"Overpass remark: {data['remark']}")
 
+            _consecutive_429 = 0
             return data
 
         except requests.exceptions.Timeout:
-            msg = f"Timeout Overpass (tentative {attempt}/{MAX_RETRIES})"
+            msg = f"Timeout Overpass (tentative {attempt}/{MAX_RETRIES}) sur {url}"
             logger.warning(msg)
             stdout.write(f"  {msg}")
+            _next_overpass_instance()
+
         except requests.exceptions.HTTPError as e:
             code = e.response.status_code
-            msg  = f"Erreur HTTP {code} (tentative {attempt}/{MAX_RETRIES})"
-            logger.warning(msg)
-            stdout.write(f"  {msg}")
             if code == 429:
-                # Trop de requêtes — on attend 3x plus longtemps avant de réessayer
-                wait = RETRY_DELAY * 3
-                stdout.write(f"  429 rate limit, on attend {wait}s...")
+                _consecutive_429 += 1
+                retry_after = e.response.headers.get("Retry-After")
+                if retry_after:
+                    wait = int(retry_after)
+                    source = "Retry-After header"
+                else:
+                    wait = min(60 * (2 ** (attempt - 1)), _MAX_GLOBAL_WAIT)
+                    source = "backoff exponentiel"
+                msg = (f"HTTP 429 (tentative {attempt}/{MAX_RETRIES}) — "
+                       f"attente {wait}s ({source})")
+                logger.warning(msg)
+                stdout.write(f"  {msg}")
+                new_url = _next_overpass_instance()
+                stdout.write(f"  Bascule vers {new_url}")
                 time.sleep(wait)
                 continue
+            else:
+                msg = f"Erreur HTTP {code} (tentative {attempt}/{MAX_RETRIES})"
+                logger.warning(msg)
+                stdout.write(f"  {msg}")
+
         except requests.exceptions.RequestException as e:
             msg = f"Erreur réseau : {e} (tentative {attempt}/{MAX_RETRIES})"
             logger.warning(msg)
             stdout.write(f"  {msg}")
+            _next_overpass_instance()
+
         except ValueError as e:
             logger.error("Réponse Overpass invalide : %s", e)
             stdout.write(f"  Réponse invalide : {e}")
             return None
 
         if attempt < MAX_RETRIES:
-            stdout.write(f"  Nouvelle tentative dans {RETRY_DELAY}s...")
-            time.sleep(RETRY_DELAY)
+            wait = RETRY_DELAY * attempt
+            stdout.write(f"  Nouvelle tentative dans {wait}s...")
+            time.sleep(wait)
 
     logger.error("Overpass inaccessible après %d tentatives", MAX_RETRIES)
     return None
 
 
+def _inter_zone_delay(stdout) -> None:
+    """Pause adaptative — s'allonge si le serveur throttle en série."""
+    if _consecutive_429 == 0:
+        wait = REQUEST_DELAY
+    elif _consecutive_429 <= 3:
+        wait = REQUEST_DELAY * 5
+    elif _consecutive_429 <= 6:
+        wait = REQUEST_DELAY * 10
+    else:
+        wait = _MAX_GLOBAL_WAIT
+        stdout.write(
+            f"  {_consecutive_429} zones en 429 consecutif — "
+            f"pause de {wait}s pour laisser le serveur recuperer."
+        )
+    time.sleep(wait)
+
+
 # ─── Classificateur d'éléments OSM ───────────────────────────────────────────
-# Puisqu'on récupère tout en une requête, on trie ensuite.
-# L'ordre des conditions compte : highway d'abord car un élément peut avoir
-# plusieurs tags (ex: une route en forêt a highway + natural parfois).
 
 def classify_element(el: dict) -> str:
     tags = el.get("tags", {})
@@ -501,9 +578,6 @@ def classify_element(el: dict) -> str:
 
 
 # ─── Création automatique des zones ──────────────────────────────────────────
-# On utilise bulk_create pour éviter une requête INSERT par ville.
-# Les zones déjà en base (codes existants) sont ignorées — pas d'écrasement
-# des zones saisies manuellement dans l'admin.
 
 def create_zones_if_missing(stdout) -> int:
     existing = set(Zone.objects.values_list("code", flat=True))
@@ -519,240 +593,300 @@ def create_zones_if_missing(stdout) -> int:
     return len(to_create)
 
 
-# ─── Sauvegarde en base ───────────────────────────────────────────────────────
-# Même pattern pour les 3 types de données :
-#   1. On charge les objets existants en mémoire (évite les N+1 queries)
-#   2. On sépare créations et mises à jour
-#   3. bulk_create / bulk_update en transaction atomique par lots de 200
+# ─── Sauvegarde en base — fonction générique DRY ─────────────────────────────
+#
+# Les 3 fonctions save_* sont factorisées ici.
+# Clé d'identification : osm_id (BigIntegerField dans les modèles).
+# Avantages vs l'ancienne clé par nom :
+#   - Pas de collision sur les noms identiques ("Route Nationale" × 50)
+#   - Suppression automatique des éléments disparus d'OSM
+#   - Gestion d'erreur par élément sans planter tout le lot
+#
+# PRÉREQUIS : osm_id doit exister dans le modèle.
+# Voir models_patch.py pour le diff à appliquer.
 
-def save_roads(zone: Zone, elements: list, stdout) -> tuple[int, int]:
-    now = timezone.now()
-    # Charger en une requête, pas besoin de tous les champs
-    existing = {
-        r.name: r
-        for r in RoadSegment.objects.filter(zone=zone)
-        .only("id", "name", "condition_score", "status",
-              "surface_type", "geojson", "notes", "last_analyzed")
+def _build_road_defaults(el: dict, now) -> dict | None:
+    """Construit le dict de champs pour un RoadSegment depuis un élément OSM."""
+    tags    = el.get("tags", {})
+    highway = tags.get("highway", "unclassified")
+    name    = (tags.get("name") or tags.get("ref")
+               or f"{HIGHWAY_LABEL.get(highway, highway)} #{el['id']}")
+    geometry = el.get("geometry", [])
+    if len(geometry) < 2:
+        return None  # trop peu de points, segment invalide
+
+    geojson = {
+        "type": "LineString",
+        "coordinates": [[p["lon"], p["lat"]] for p in geometry],
     }
-    to_create, to_update = [], []
+    score   = score_from_tags(highway, tags)
+    status  = status_from_score(score)
+    surface = surface_from_tags(highway, tags)
+
+    parts = [f"Type OSM : {highway}"]
+    if tags.get("maxspeed"):   parts.append(f"Vitesse max : {tags['maxspeed']} km/h")
+    if tags.get("lanes"):      parts.append(f"Voies : {tags['lanes']}")
+    if tags.get("smoothness"): parts.append(f"État OSM : {tags['smoothness']}")
+
+    return {
+        "name":            name,
+        "status":          status,
+        "condition_score": score,
+        "surface_type":    surface,
+        "geojson":         geojson,
+        "notes":           " | ".join(parts),
+        "last_analyzed":   now,
+    }
+
+
+def _build_flood_defaults(el: dict, now) -> dict | None:
+    """Construit le dict de champs pour un FloodRisk depuis un élément OSM."""
+    tags     = el.get("tags", {})
+    waterway = tags.get("waterway", "")
+    natural  = tags.get("natural", "")
+    name     = tags.get("name") or tags.get("ref") or f"Zone hydro #{el['id']}"
+    key      = waterway or natural
+
+    lo, hi = FLOOD_SCORE_RANGE.get(key, (20, 50))
+    score  = round(lo + (el["id"] % 1000) / 1000.0 * (hi - lo), 1)
+
+    if score >= 70:   risk_level = "critique"
+    elif score >= 50: risk_level = "eleve"
+    elif score >= 30: risk_level = "modere"
+    else:             risk_level = "faible"
+
+    geometry = el.get("geometry", [])
+    if geometry:
+        coords   = [[p["lon"], p["lat"]] for p in geometry]
+        closed   = _close_polygon(coords)  # fermeture explicite du polygone
+        area_km2 = _polygon_area_km2(geometry)
+        geojson  = {"type": "Polygon", "coordinates": [closed]}
+    else:
+        area_km2 = 0.0
+        geojson  = {}
+
+    return {
+        "name":         name,
+        "risk_level":   risk_level,
+        "risk_score":   score,
+        "area_km2":     area_km2,
+        "rainfall_mm":  0.0,
+        "geojson":      geojson,
+        "last_analyzed": now,
+    }
+
+
+def _build_vegetation_defaults(el: dict, now) -> dict | None:
+    """Construit le dict de champs pour un VegetationDensity depuis un élément OSM."""
+    tags    = el.get("tags", {})
+    landuse = tags.get("landuse", "")
+    natural = tags.get("natural", "")
+    name    = tags.get("name") or f"Végétation #{el['id']}"
+    key     = landuse or natural
+
+    lo, hi = NDVI_RANGE.get(key, (0.18, 0.55))
+    ndvi   = round(lo + (el["id"] % 10000) / 10000.0 * (hi - lo), 3)
+    density = ndvi_to_density(ndvi)
+
+    geometry = el.get("geometry", [])
+    if geometry:
+        coords  = [[p["lon"], p["lat"]] for p in geometry]
+        closed  = _close_polygon(coords)
+        geojson = {"type": "Polygon", "coordinates": [closed]}
+    else:
+        geojson = {}
+
+    return {
+        "name":              name,
+        "ndvi_value":        ndvi,
+        "density_class":     density,
+        "coverage_percent":  round(ndvi * 100, 1),
+        "change_vs_previous": 0.0,
+        "geojson":           geojson,
+        "last_analyzed":     now,
+    }
+
+
+# Correspondance modèle → builder + champs à mettre à jour
+_MODEL_CONFIG = {
+    RoadSegment: {
+        "builder":       _build_road_defaults,
+        "update_fields": ["name", "condition_score", "status", "surface_type",
+                          "geojson", "notes", "last_analyzed"],
+    },
+    FloodRisk: {
+        "builder":       _build_flood_defaults,
+        "update_fields": ["name", "risk_level", "risk_score", "area_km2",
+                          "geojson", "last_analyzed"],
+    },
+    VegetationDensity: {
+        "builder":       _build_vegetation_defaults,
+        "update_fields": ["name", "ndvi_value", "density_class",
+                          "coverage_percent", "geojson", "last_analyzed"],
+    },
+}
+
+
+def _save_elements(
+    zone: Zone,
+    elements: list,
+    ModelClass,
+    stdout,
+) -> tuple[int, int, int]:
+    """
+    Upsert + delete générique pour RoadSegment, FloodRisk, VegetationDensity.
+
+    Retourne (créés, mis_à_jour, supprimés).
+
+    Identification par osm_id — pas de collision sur les noms.
+    Les éléments disparus d'OSM sont supprimés de la base.
+    Les erreurs par élément sont loggées sans planter le lot.
+    """
+    cfg    = _MODEL_CONFIG[ModelClass]
+    builder = cfg["builder"]
+    update_fields = cfg["update_fields"]
+    now = timezone.now()
+
+    # Charger les objets existants indexés par osm_id
+    existing: dict[int, ModelClass] = {
+        obj.osm_id: obj
+        for obj in ModelClass.objects.filter(zone=zone).only("id", "osm_id", *update_fields)
+        if obj.osm_id is not None
+    }
+
+    to_create:     list = []
+    to_update:     list = []
+    processed_ids: set  = set()
+    skipped        = 0
 
     for el in elements:
-        tags    = el.get("tags", {})
-        highway = tags.get("highway", "unclassified")
-        name    = (tags.get("name") or tags.get("ref")
-                   or f"{HIGHWAY_LABEL.get(highway, highway)} #{el['id']}")
-        geometry = el.get("geometry", [])
-        if len(geometry) < 2:
-            continue  # pas assez de points pour tracer une ligne, on skip
+        osm_id = el.get("id")
+        if osm_id is None:
+            skipped += 1
+            continue
 
-        geojson = {"type": "LineString",
-                   "coordinates": [[p["lon"], p["lat"]] for p in geometry]}
-        score   = score_from_tags(highway, tags)
-        status  = status_from_score(score)
-        surface = surface_from_tags(highway, tags)
+        try:
+            defaults = builder(el, now)
+            if defaults is None:
+                # Géométrie invalide (ex: segment < 2 points)
+                skipped += 1
+                continue
 
-        # Notes techniques issues des tags OSM — pratiques pour l'admin
-        parts = [f"Type OSM : {highway}"]
-        if tags.get("maxspeed"):   parts.append(f"Vitesse max : {tags['maxspeed']} km/h")
-        if tags.get("lanes"):      parts.append(f"Voies : {tags['lanes']}")
-        if tags.get("smoothness"): parts.append(f"État OSM : {tags['smoothness']}")
-        notes = " | ".join(parts)
+            processed_ids.add(osm_id)
 
-        if name in existing:
-            r = existing[name]
-            r.condition_score = score
-            r.status          = status
-            r.surface_type    = surface
-            r.geojson         = geojson
-            r.notes           = notes
-            r.last_analyzed   = now
-            to_update.append(r)
-        else:
-            to_create.append(RoadSegment(
-                zone=zone, name=name, status=status,
-                condition_score=score, surface_type=surface,
-                geojson=geojson, notes=notes, last_analyzed=now,
-            ))
+            if osm_id in existing:
+                obj = existing[osm_id]
+                for field, value in defaults.items():
+                    setattr(obj, field, value)
+                to_update.append(obj)
+            else:
+                to_create.append(
+                    ModelClass(zone=zone, osm_id=osm_id, **defaults)
+                )
+
+        except Exception as e:
+            logger.error(
+                "Erreur traitement OSM id=%s (%s / zone=%s) : %s",
+                osm_id, ModelClass.__name__, zone.code, e
+            )
+            skipped += 1
+            continue
+
+    # Éléments disparus d'OSM depuis le dernier import
+    obsolete_ids = set(existing.keys()) - processed_ids
 
     with transaction.atomic():
         if to_create:
-            RoadSegment.objects.bulk_create(to_create, batch_size=200)
+            ModelClass.objects.bulk_create(to_create, batch_size=200)
         if to_update:
-            RoadSegment.objects.bulk_update(
-                to_update,
-                ["condition_score", "status", "surface_type",
-                 "geojson", "notes", "last_analyzed"],
-                batch_size=200,
+            ModelClass.objects.bulk_update(to_update, update_fields, batch_size=200)
+        if obsolete_ids:
+            deleted_count, _ = ModelClass.objects.filter(
+                zone=zone, osm_id__in=obsolete_ids
+            ).delete()
+            logger.info(
+                "%d %s supprimés (obsolètes OSM) — zone %s",
+                deleted_count, ModelClass.__name__, zone.code
             )
 
-    return len(to_create), len(to_update)
+    if skipped:
+        logger.debug("%d éléments ignorés (géométrie invalide) — zone %s", skipped, zone.code)
+
+    return len(to_create), len(to_update), len(obsolete_ids)
+
+
+# ─── Fonctions publiques (conservent la même interface qu'avant) ──────────────
+
+def save_roads(zone: Zone, elements: list, stdout) -> tuple[int, int]:
+    c, u, d = _save_elements(zone, elements, RoadSegment, stdout)
+    if d:
+        stdout.write(f"  Routes : {d} obsolètes supprimées")
+    return c, u
 
 
 def save_flood_risks(zone: Zone, elements: list, stdout) -> tuple[int, int]:
-    now = timezone.now()
-    existing = {
-        f.name: f
-        for f in FloodRisk.objects.filter(zone=zone)
-        .only("id", "name", "risk_level", "risk_score",
-              "area_km2", "geojson", "last_analyzed")
-    }
-    to_create, to_update = [], []
-
-    for el in elements:
-        tags     = el.get("tags", {})
-        waterway = tags.get("waterway", "")
-        natural  = tags.get("natural", "")
-        name     = tags.get("name") or tags.get("ref") or f"Zone hydro #{el['id']}"
-        key      = waterway or natural
-
-        lo, hi = FLOOD_SCORE_RANGE.get(key, (20, 50))
-        # Score déterministe basé sur l'ID OSM — pas de random(), résultats reproductibles
-        score  = round(lo + (el["id"] % 1000) / 1000.0 * (hi - lo), 1)
-
-        if score >= 70:   risk_level = "critique"
-        elif score >= 50: risk_level = "eleve"
-        elif score >= 30: risk_level = "modere"
-        else:             risk_level = "faible"
-
-        geometry = el.get("geometry", [])
-        if geometry:
-            lats = [p["lat"] for p in geometry]
-            lngs = [p["lon"] for p in geometry]
-            area_km2 = round(
-                haversine_km(min(lats), min(lngs), max(lats), max(lngs)) * 0.5, 3
-            )
-            geojson = {"type": "Polygon",
-                       "coordinates": [[[p["lon"], p["lat"]] for p in geometry]]}
-        else:
-            area_km2 = 0.0
-            geojson  = {}
-
-        if name in existing:
-            f = existing[name]
-            f.risk_level    = risk_level
-            f.risk_score    = score
-            f.area_km2      = area_km2
-            f.geojson       = geojson
-            f.last_analyzed = now
-            to_update.append(f)
-        else:
-            to_create.append(FloodRisk(
-                zone=zone, name=name, risk_level=risk_level,
-                risk_score=score, area_km2=area_km2,
-                rainfall_mm=0.0,  # sera mis à jour par GEE plus tard
-                geojson=geojson, last_analyzed=now,
-            ))
-
-    with transaction.atomic():
-        if to_create:
-            FloodRisk.objects.bulk_create(to_create, batch_size=200)
-        if to_update:
-            FloodRisk.objects.bulk_update(
-                to_update,
-                ["risk_level", "risk_score", "area_km2", "geojson", "last_analyzed"],
-                batch_size=200,
-            )
-
-    return len(to_create), len(to_update)
+    c, u, d = _save_elements(zone, elements, FloodRisk, stdout)
+    if d:
+        stdout.write(f"  Inondations : {d} obsolètes supprimées")
+    return c, u
 
 
 def save_vegetation(zone: Zone, elements: list, stdout) -> tuple[int, int]:
-    now = timezone.now()
-    existing = {
-        v.name: v
-        for v in VegetationDensity.objects.filter(zone=zone)
-        .only("id", "name", "ndvi_value", "density_class",
-              "coverage_percent", "geojson", "last_analyzed")
-    }
-    to_create, to_update = [], []
+    c, u, d = _save_elements(zone, elements, VegetationDensity, stdout)
+    if d:
+        stdout.write(f"  Végétation : {d} obsolètes supprimées")
+    return c, u
 
-    for el in elements:
-        tags    = el.get("tags", {})
-        landuse = tags.get("landuse", "")
-        natural = tags.get("natural", "")
-        name    = tags.get("name") or f"Végétation #{el['id']}"
-        key     = landuse or natural
 
-        lo, hi = NDVI_RANGE.get(key, (0.18, 0.55))
-        # Même principe que flood : ID OSM comme graine déterministe
-        ndvi    = round(lo + (el["id"] % 10000) / 10000.0 * (hi - lo), 3)
-        density = ndvi_to_density(ndvi)
-
-        geometry = el.get("geometry", [])
-        geojson  = (
-            {"type": "Polygon",
-             "coordinates": [[[p["lon"], p["lat"]] for p in geometry]]}
-            if geometry else {}
-        )
-
-        if name in existing:
-            v = existing[name]
-            v.ndvi_value       = ndvi
-            v.density_class    = density
-            v.coverage_percent = round(ndvi * 100, 1)
-            v.geojson          = geojson
-            v.last_analyzed    = now
-            to_update.append(v)
-        else:
-            to_create.append(VegetationDensity(
-                zone=zone, name=name, ndvi_value=ndvi,
-                density_class=density, coverage_percent=round(ndvi * 100, 1),
-                change_vs_previous=0.0,
-                geojson=geojson, last_analyzed=now,
-            ))
-
-    with transaction.atomic():
-        if to_create:
-            VegetationDensity.objects.bulk_create(to_create, batch_size=200)
-        if to_update:
-            VegetationDensity.objects.bulk_update(
-                to_update,
-                ["ndvi_value", "density_class", "coverage_percent",
-                 "geojson", "last_analyzed"],
-                batch_size=200,
-            )
-
-    return len(to_create), len(to_update)
-
+# ─── Génération d'alertes ─────────────────────────────────────────────────────
 
 def generate_alerts(zone: Zone) -> int:
     """
-    Génère des alertes automatiques depuis les données importées.
-    get_or_create évite les doublons si on relance l'import sur la même zone.
-    On se limite aux cas les plus critiques pour ne pas spammer le dashboard.
+    Génère des alertes pour les routes dégradées et les zones inondables critiques.
+    get_or_create évite les doublons à chaque réimport.
     """
     count = 0
     now   = timezone.now()
 
-    # Routes les plus dégradées en premier
-    for road in zone.roads.filter(status__in=["critique", "ferme"]).order_by("condition_score")[:3]:
+    for road in (zone.roads
+                 .filter(status__in=["critique", "ferme"])
+                 .order_by("condition_score")[:3]):
         _, created = Alert.objects.get_or_create(
-            zone=zone, title=f"Route dégradée : {road.name}",
-            category="road", is_read=False,
+            zone=zone,
+            title=f"Route dégradée : {road.name}",
+            category="road",
+            is_read=False,
             defaults={
                 "message": (
                     f"Segment '{road.name}' — score {road.condition_score}/100 "
                     f"({road.get_status_display()}). Inspection recommandée."
                 ),
-                "severity": "critical" if road.status == "ferme" else "danger",
-                "created_at": now, "lat": zone.lat_center, "lng": zone.lng_center,
+                "severity":   "critical" if road.status == "ferme" else "danger",
+                "created_at": now,
+                "lat":        zone.lat_center,
+                "lng":        zone.lng_center,
             },
         )
         if created:
             count += 1
 
-    # Zones inondables à risque élevé ou critique
-    for flood in zone.flood_risks.filter(risk_level__in=["eleve", "critique"]).order_by("-risk_score")[:2]:
+    for flood in (zone.flood_risks
+                  .filter(risk_level__in=["eleve", "critique"])
+                  .order_by("-risk_score")[:2]):
         _, created = Alert.objects.get_or_create(
-            zone=zone, title=f"Risque inondation : {flood.name}",
-            category="flood", is_read=False,
+            zone=zone,
+            title=f"Risque inondation : {flood.name}",
+            category="flood",
+            is_read=False,
             defaults={
                 "message": (
                     f"Zone '{flood.name}' — risque {flood.get_risk_level_display()}, "
                     f"score {flood.risk_score}/100."
                 ),
-                "severity": "critical" if flood.risk_level == "critique" else "warning",
-                "created_at": now, "lat": zone.lat_center, "lng": zone.lng_center,
+                "severity":   "critical" if flood.risk_level == "critique" else "warning",
+                "created_at": now,
+                "lat":        zone.lat_center,
+                "lng":        zone.lng_center,
             },
         )
         if created:
@@ -767,14 +901,22 @@ class Command(BaseCommand):
     help = "Importe les données géospatiales OSM pour les zones de Côte d'Ivoire."
 
     def add_arguments(self, parser):
-        parser.add_argument("--zone",       type=str,        default=None,
-                            help="Code zone (ex: MAN). Absent = toutes les zones.")
-        parser.add_argument("--dry-run",    action="store_true",
-                            help="Simule sans écrire en base.")
-        parser.add_argument("--clear",      action="store_true",
-                            help="Supprime les données existantes avant import.")
-        parser.add_argument("--roads-only", action="store_true",
-                            help="Routes uniquement, ignore eau et végétation.")
+        parser.add_argument(
+            "--zone", type=str, default=None,
+            help="Code zone (ex: MAN). Absent = toutes les zones.",
+        )
+        parser.add_argument(
+            "--dry-run", action="store_true",
+            help="Simule sans écrire en base.",
+        )
+        parser.add_argument(
+            "--clear", action="store_true",
+            help="Supprime les données existantes avant import.",
+        )
+        parser.add_argument(
+            "--roads-only", action="store_true",
+            help="Routes uniquement, ignore eau et végétation.",
+        )
 
     def handle(self, *args, **options):
         dry_run    = options["dry_run"]
@@ -782,34 +924,36 @@ class Command(BaseCommand):
         roads_only = options["roads_only"]
 
         if dry_run:
-            self.stdout.write(self.style.WARNING("DRY-RUN — aucune écriture en base\n"))
+            self.stdout.write(self.style.WARNING("DRY-RUN -- aucune ecriture en base\n"))
 
-        # Créer les zones manquantes avant tout le reste
         if not dry_run:
-            self.stdout.write(self.style.HTTP_INFO("Vérification des zones de Côte d'Ivoire..."))
+            self.stdout.write(self.style.HTTP_INFO("Verification des zones de Cote d'Ivoire..."))
             n = create_zones_if_missing(self.stdout)
             if n:
-                self.stdout.write(self.style.SUCCESS(f"  {n} zone(s) créée(s)\n"))
+                self.stdout.write(self.style.SUCCESS(f"  {n} zone(s) creee(s)\n"))
             else:
-                self.stdout.write(f"  {Zone.objects.count()} zones déjà présentes\n")
+                self.stdout.write(f"  {Zone.objects.count()} zones deja presentes\n")
 
-        # Sélection des zones à traiter
         if zone_code:
             zones = Zone.objects.filter(code__iexact=zone_code)
             if not zones.exists():
                 available = ", ".join(Zone.objects.values_list("code", flat=True))
-                raise CommandError(f"Zone '{zone_code}' introuvable. Codes disponibles : {available}")
+                raise CommandError(
+                    f"Zone '{zone_code}' introuvable. Codes disponibles : {available}"
+                )
         else:
             zones = Zone.objects.all()
 
         if not zones.exists():
-            raise CommandError("Aucune zone en base. Lance sans --zone pour créer les zones CI.")
+            raise CommandError(
+                "Aucune zone en base. Lance sans --zone pour créer les zones CI."
+            )
 
-        self.stdout.write(f"Zones à traiter : {zones.count()}\n")
+        self.stdout.write(f"Zones a traiter : {zones.count()}\n")
+        self.stdout.write(f"Instances Overpass : {', '.join(OVERPASS_INSTANCES)}\n")
 
-        # Nettoyage avant import si demandé
         if options["clear"] and not dry_run:
-            self.stdout.write(self.style.WARNING("Suppression des données existantes..."))
+            self.stdout.write(self.style.WARNING("Suppression des donnees existantes..."))
             with transaction.atomic():
                 if zone_code:
                     for z in zones:
@@ -818,56 +962,55 @@ class Command(BaseCommand):
                         z.vegetation.all().delete()
                         z.alerts.all().delete()
                 else:
-                    # Nettoyage global plus rapide qu'en boucle
                     RoadSegment.objects.all().delete()
                     FloodRisk.objects.all().delete()
                     VegetationDensity.objects.all().delete()
-                    Alert.objects.filter(category__in=["road", "flood", "vegetation"]).delete()
-            self.stdout.write("  Base nettoyée\n")
+                    Alert.objects.filter(
+                        category__in=["road", "flood", "vegetation"]
+                    ).delete()
+            self.stdout.write("  Base nettoyee\n")
 
         totals = dict(rc=0, ru=0, fc=0, fu=0, vc=0, vu=0, alerts=0, errors=0)
 
         for zone in zones:
-            self.stdout.write(self.style.HTTP_INFO(f"\n{'─' * 52}"))
+            self.stdout.write(self.style.HTTP_INFO(f"\n{'-' * 52}"))
             self.stdout.write(self.style.HTTP_INFO(f"  {zone.name} ({zone.code})"))
 
             zone_bbox = make_bbox(zone.lat_center, zone.lng_center)
-
-            self.stdout.write("  Requête Overpass (routes + eau + végétation)...")
+            self.stdout.write("  Requete Overpass (routes + eau + vegetation)...")
             data = overpass_fetch(zone_bbox, roads_only, self.stdout)
 
             if data is None:
                 totals["errors"] += 1
-                logger.error("Import échoué — zone %s (%s)", zone.name, zone.code)
+                logger.error("Import echoue -- zone %s (%s)", zone.name, zone.code)
                 self.stdout.write(self.style.ERROR(
-                    f"  Overpass inaccessible pour {zone.name} — zone ignorée."
+                    f"  Overpass inaccessible pour {zone.name} -- zone ignoree."
                 ))
-                time.sleep(REQUEST_DELAY)
+                _inter_zone_delay(self.stdout)
                 continue
 
-            # Trier les éléments en une seule passe — pas trois boucles séparées
-            elements  = [el for el in data.get("elements", []) if el.get("type") == "way"]
-            roads_el  = [el for el in elements if classify_element(el) == "road"]
-            flood_el  = [el for el in elements if classify_element(el) == "flood"]
-            veg_el    = [el for el in elements if classify_element(el) == "vegetation"]
+            elements = [el for el in data.get("elements", []) if el.get("type") == "way"]
+            roads_el = [el for el in elements if classify_element(el) == "road"]
+            flood_el = [el for el in elements if classify_element(el) == "flood"]
+            veg_el   = [el for el in elements if classify_element(el) == "vegetation"]
 
             self.stdout.write(
                 f"  {len(roads_el)} routes, {len(flood_el)} zones eau, "
-                f"{len(veg_el)} zones végétation"
+                f"{len(veg_el)} zones vegetation"
             )
 
             if dry_run:
-                time.sleep(REQUEST_DELAY)
+                _inter_zone_delay(self.stdout)
                 continue
 
             try:
                 c, u = save_roads(zone, roads_el, self.stdout)
                 totals["rc"] += c
                 totals["ru"] += u
-                self.stdout.write(f"  Routes : {c} créées, {u} mises à jour")
+                self.stdout.write(f"  Routes : {c} creees, {u} mises a jour")
             except Exception as e:
                 totals["errors"] += 1
-                logger.exception("Erreur save_roads — zone %s", zone.code)
+                logger.exception("Erreur save_roads -- zone %s", zone.code)
                 self.stdout.write(self.style.ERROR(f"  Routes KO : {e}"))
 
             if not roads_only:
@@ -875,46 +1018,51 @@ class Command(BaseCommand):
                     c, u = save_flood_risks(zone, flood_el, self.stdout)
                     totals["fc"] += c
                     totals["fu"] += u
-                    self.stdout.write(f"  Inondations : {c} créées, {u} mises à jour")
+                    self.stdout.write(f"  Inondations : {c} creees, {u} mises a jour")
                 except Exception as e:
                     totals["errors"] += 1
-                    logger.exception("Erreur save_flood_risks — zone %s", zone.code)
+                    logger.exception("Erreur save_flood_risks -- zone %s", zone.code)
                     self.stdout.write(self.style.ERROR(f"  Inondations KO : {e}"))
 
                 try:
                     c, u = save_vegetation(zone, veg_el, self.stdout)
                     totals["vc"] += c
                     totals["vu"] += u
-                    self.stdout.write(f"  Végétation : {c} créées, {u} mises à jour")
+                    self.stdout.write(f"  Vegetation : {c} creees, {u} mises a jour")
                 except Exception as e:
                     totals["errors"] += 1
-                    logger.exception("Erreur save_vegetation — zone %s", zone.code)
-                    self.stdout.write(self.style.ERROR(f"  Végétation KO : {e}"))
+                    logger.exception("Erreur save_vegetation -- zone %s", zone.code)
+                    self.stdout.write(self.style.ERROR(f"  Vegetation KO : {e}"))
 
                 try:
                     n = generate_alerts(zone)
                     totals["alerts"] += n
-                    self.stdout.write(f"  Alertes générées : {n}")
+                    self.stdout.write(f"  Alertes generees : {n}")
                 except Exception as e:
                     totals["errors"] += 1
-                    logger.exception("Erreur generate_alerts — zone %s", zone.code)
+                    logger.exception("Erreur generate_alerts -- zone %s", zone.code)
                     self.stdout.write(self.style.ERROR(f"  Alertes KO : {e}"))
 
-            time.sleep(REQUEST_DELAY)
+            _inter_zone_delay(self.stdout)
 
-        # Résumé final
-        self.stdout.write(self.style.SUCCESS(f"\n{'═' * 52}"))
-        self.stdout.write(self.style.SUCCESS("Import terminé"))
+        self.stdout.write(self.style.SUCCESS(f"\n{'=' * 52}"))
+        self.stdout.write(self.style.SUCCESS("Import termine"))
         if not dry_run:
-            self.stdout.write(f"  Routes      — créées : {totals['rc']}, mises à jour : {totals['ru']}")
-            self.stdout.write(f"  Inondations — créées : {totals['fc']}, mises à jour : {totals['fu']}")
-            self.stdout.write(f"  Végétation  — créées : {totals['vc']}, mises à jour : {totals['vu']}")
-            self.stdout.write(f"  Alertes générées     : {totals['alerts']}")
+            self.stdout.write(
+                f"  Routes      -- creees : {totals['rc']}, mises a jour : {totals['ru']}"
+            )
+            self.stdout.write(
+                f"  Inondations -- creees : {totals['fc']}, mises a jour : {totals['fu']}"
+            )
+            self.stdout.write(
+                f"  Vegetation  -- creees : {totals['vc']}, mises a jour : {totals['vu']}"
+            )
+            self.stdout.write(f"  Alertes generees     : {totals['alerts']}")
             if totals["errors"]:
                 self.stdout.write(self.style.WARNING(
-                    f"  {totals['errors']} zone(s) en erreur — voir les logs Django."
+                    f"  {totals['errors']} zone(s) en erreur -- voir les logs Django."
                 ))
         else:
             self.stdout.write(self.style.WARNING(
-                "\nDry-run terminé. Relance sans --dry-run pour importer réellement."
+                "\nDry-run termine. Relance sans --dry-run pour importer reellement."
             ))

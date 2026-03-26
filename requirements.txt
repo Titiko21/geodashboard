@@ -1,3 +1,41 @@
-Django>=5.0,<6.1
-earthengine-api>=0.1.390
-python-dotenv>=1.0.0
+# Django core
+Django==5.1.15
+asgiref==3.11.0
+sqlparse==0.5.4
+whitenoise==6.11.0
+
+# PostgreSQL (CRITIQUE)
+psycopg2-binary==2.9.9
+
+# Formulaires
+django-crispy-forms==2.5
+crispy-bootstrap5==2025.6
+
+# Téléphone
+django-phonenumber-field==8.4.0
+phonenumbers==9.0.21
+
+# Google Earth Engine + dépendances Google
+earthengine-api==1.7.16
+google-api-core==2.30.0
+google-api-python-client==2.191.0
+google-auth==2.48.0
+google-auth-httplib2==0.3.0
+google-cloud-core==2.5.0
+google-cloud-storage==3.9.0
+google-crc32c==1.8.0
+google-resumable-media==2.8.0
+googleapis-common-protos==1.72.0
+proto-plus==1.27.1
+protobuf==6.33.5
+
+# Utilitaires
+Pillow==12.0.0
+requests==2.32.5
+python-dotenv==1.2.2
+python-decouple==3.8
+pytz==2026.1.post1
+tzdata==2025.2
+
+# Prod
+gunicorn>=21.0

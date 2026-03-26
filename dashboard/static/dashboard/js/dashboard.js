@@ -10,6 +10,7 @@
  *   – Événements (initEventListeners)
  *   – Carte (initMap, rendu GeoJSON, popups)
  *   – Contrôle des couches (setLayer, toggleLayer)
+ *   – GEE (refreshGeeLayer — NDVI + SAR)
  *   – Alertes (focusAlert, refreshAlerts)
  *   – Graphiques Chart.js (initCharts)
  *   – Toasts
@@ -23,10 +24,15 @@ let map        = null;
 let lRoads     = null;
 let lFloods    = null;
 let lVeg       = null;
+let lGeeNdvi   = null;
+let lGeeFlood  = null;
 let _allBounds = [];
 let _initLat   = 5.35;
 let _initLng   = -4.00;
 let _mapReady  = false;
+
+/* Zone courante — lue depuis l'URL au démarrage, utilisée partout */
+var _activeZoneCode = (new URLSearchParams(window.location.search)).get('zone') || '';
 
 const layerVis = { roads: true, floods: true, vegetation: true };
 const layerRef = {
@@ -35,11 +41,7 @@ const layerRef = {
   vegetation: function () { return lVeg; },
 };
 
-/* ─── Couleurs centralisées ────────────────────────────
-   Source unique de vérité pour toutes les couleurs du
-   dashboard — évite les objets COLORS dispersés dans
-   _renderData, les popups, focusAlert, etc.
-────────────────────────────────────────────────────── */
+/* ─── Couleurs centralisées ─────────────────────────────────────────────────── */
 const GD_COLORS = {
   road:           '#5b8dee',
   flood:          '#26c6da',
@@ -55,10 +57,7 @@ const GD_COLORS = {
   veg_very_dense: '#14532d',
 };
 
-/* ─── Paramètres + couche tuiles (globaux dès le départ) ──
-   Déclarés ici pour que toggleTheme() et initEventListeners()
-   les trouvent immédiatement, avant que initSettings() tourne.
-────────────────────────────────────────────────────────── */
+/* ─── Paramètres + couche tuiles ────────────────────────────────────────────── */
 const GD_SETTINGS_DEFAULT = {
   theme:           'light',
   density:         'normal',
@@ -73,38 +72,27 @@ const GD_SETTINGS_DEFAULT = {
   lang:            'fr',
 };
 
-// Pré-initialisé avec les défauts — jamais vide même si initSettings()
-// n'a pas encore tourné (ex. clic rapide sur le toggle thème au démarrage).
-let _settings = Object.assign({}, GD_SETTINGS_DEFAULT);
-
-// Déclaré ici avec les autres globales — plus clair qu'au milieu du fichier.
+let _settings  = Object.assign({}, GD_SETTINGS_DEFAULT);
 let _tileLayer = null;
 
 
 /* ══════════════════════════════════════════════════════════
-   THÈME — toggle + persistance localStorage
+   THÈME
 ══════════════════════════════════════════════════════════ */
 
-/**
- * Bascule entre light et dark.
- * Ajoute temporairement `.theme-transitioning` pour une transition douce.
- */
 function toggleTheme() {
   var html    = document.documentElement;
   var current = html.getAttribute('data-theme') || 'light';
   var next    = current === 'light' ? 'dark' : 'light';
 
-  /* Transition fluide */
   html.classList.add('theme-transitioning');
   html.setAttribute('data-theme', next);
 
-  /* Synchroniser les DEUX clés localStorage pour éviter le conflit
-     au rechargement de page (ex. changement de zone) */
   try {
-    localStorage.setItem('gd-theme', next);       /* clé anti-flash */
+    localStorage.setItem('gd-theme', next);
     if (_settings) {
       _settings.theme = next;
-      _saveSettings();                             /* clé gd-settings */
+      _saveSettings();
     }
   } catch (e) {}
 
@@ -113,13 +101,9 @@ function toggleTheme() {
 
 
 /* ══════════════════════════════════════════════════════════
-   RIPPLE — micro-animation sur les éléments interactifs
+   RIPPLE
 ══════════════════════════════════════════════════════════ */
 
-/**
- * Attache un écouteur de clic sur un élément pour l'effet ripple.
- * @param {Element} el
- */
 function _addRipple(el) {
   el.addEventListener('click', function (e) {
     var rect = this.getBoundingClientRect();
@@ -138,23 +122,20 @@ function _addRipple(el) {
 
 
 /* ══════════════════════════════════════════════════════════
-   ÉVÉNEMENTS — branché sur data-* attributes
+   ÉVÉNEMENTS
 ══════════════════════════════════════════════════════════ */
 
 function initEventListeners() {
 
-  /* Boutons toolbar carte */
   document.querySelectorAll('[data-set-layer]').forEach(function (btn) {
     btn.addEventListener('click', function () { setLayer(this.dataset.setLayer, this); });
     _addRipple(btn);
   });
 
-  /* KPI cards */
   document.querySelectorAll('[data-layer]').forEach(function (card) {
     card.addEventListener('click', function () { setLayer(this.dataset.layer); });
   });
 
-  /* Toggles couches sidebar */
   document.querySelectorAll('[data-toggle-layer]').forEach(function (label) {
     label.addEventListener('click', function (e) {
       e.preventDefault();
@@ -165,11 +146,6 @@ function initEventListeners() {
     });
   });
 
-  /* Alertes — délégation d'événement sur le conteneur parent.
-     On n'attache PAS les listeners directement sur les .a-item parce que
-     refreshAlerts() recrée ces éléments toutes les 60s — les listeners
-     directs seraient perdus à chaque refresh. Avec la délégation, le
-     listener reste sur .alerts-scroll qui lui ne bouge jamais. */
   var alertsScroll = document.querySelector('.alerts-scroll');
   if (alertsScroll) {
     alertsScroll.addEventListener('click', function (e) {
@@ -182,12 +158,13 @@ function initEventListeners() {
       focusAlert(
         parseFloat(item.dataset.lat  || 0),
         parseFloat(item.dataset.lng  || 0),
-        item.dataset.category || ''
+        item.dataset.category || '',
+        item.dataset.zoneLat  || 0,
+        item.dataset.zoneLng  || 0
       );
     });
   }
 
-  /* Sélecteur de zone — on recharge la page avec ?zone=CODE dans l'URL courante */
   var zoneSelect = document.getElementById('zoneSelect');
   if (zoneSelect) {
     zoneSelect.addEventListener('change', function () {
@@ -195,7 +172,6 @@ function initEventListeners() {
     });
   }
 
-  /* Bouton toggle thème */
   var themeBtn = document.getElementById('themeToggle');
   if (themeBtn) {
     themeBtn.addEventListener('click', function (e) {
@@ -204,7 +180,8 @@ function initEventListeners() {
     });
   }
 
-  /* Ripple sur les nav-items */
+  _initKpiTooltips();
+
   document.querySelectorAll('.nav-item').forEach(function (el) {
     _addRipple(el);
   });
@@ -240,22 +217,13 @@ function initMap(lat, lng, data) {
     wheelPxPerZoomLevel: 80,
   });
 
-  /* ─── Couche de tuiles ─────────────────────────────────
-     CORRECTIFS des zones grisées :
-     1. {r} supprimé  → plus de 404 sur tuiles @2x manquantes
-     2. keepBuffer:2  → moins de requêtes simultanées (était 4)
-     3. crossOrigin   → évite les erreurs CORS/Canvas
-     4. Retry ×3      → relance les tuiles échouées au lieu de griser
-  ─────────────────────────────────────────────────────── */
   _tileLayer = _buildTileLayer((_settings && _settings.tileStyle) || 'dark');
   _tileLayer.addTo(map);
 
-  /* Contrôles */
   L.control.zoom({ position: 'bottomright' }).addTo(map);
   L.control.scale({ position: 'bottomleft', imperial: false, metric: true }).addTo(map);
   _addResetControl();
 
-  /* Couches */
   lRoads  = L.layerGroup().addTo(map);
   lFloods = L.layerGroup().addTo(map);
   lVeg    = L.layerGroup().addTo(map);
@@ -263,7 +231,6 @@ function initMap(lat, lng, data) {
   map.setView([_initLat, _initLng], 9);
   _mapReady = true;
 
-  /* ─── Recalcul taille carte au resize de la fenêtre ─── */
   window.addEventListener('resize', function () {
     clearTimeout(window._gdResizeTimer);
     window._gdResizeTimer = setTimeout(function () {
@@ -272,6 +239,12 @@ function initMap(lat, lng, data) {
   });
 
   _renderData(data);
+  updateLegend('all');
+
+  /* GEE — chargement des couches satellite 2s après l'init */
+  setTimeout(function () { refreshGeeLayer(_activeZoneCode); }, 2000);
+  setInterval(function () { refreshGeeLayer(_activeZoneCode); }, 3600 * 1000);
+
   setTimeout(_hideOverlay, 900);
 }
 
@@ -314,9 +287,6 @@ function _renderData(data) {
   var n = 0;
   _allBounds = [];
 
-  /* ── Routes ──────────────────────────────────────────
-     Double trait : ombre noire + couleur → effet glow pro
-  ─────────────────────────────────────────────────────*/
   (data.routes || []).forEach(function (r) {
     var geo = r.geojson;
     if (!geo) return;
@@ -330,14 +300,12 @@ function _renderData(data) {
         });
       } else return;
 
-      /* Ombre (trait noir semi-transparent en dessous) */
       var shadow = L.polyline(coords, {
         color: 'rgba(0,0,0,.45)', weight: 8, opacity: 1,
         lineCap: 'round', lineJoin: 'round', interactive: false,
       });
       lRoads.addLayer(shadow);
 
-      /* Trait principal */
       var opts = { color: r.color, weight: 5, opacity: .9, lineCap: 'round', lineJoin: 'round' };
       var lyr  = L.polyline(coords, opts);
 
@@ -353,18 +321,15 @@ function _renderData(data) {
       });
       lyr.bindPopup(_popupRoad(r), { maxWidth: 280, className: 'gd-popup', autoPanPadding: [50,50] });
       lRoads.addLayer(lyr);
-
-      /* Stocker la référence route pour focusFeature */
       lyr._gdMeta = { type: 'road', id: r.id, name: r.name, color: r.color };
       _collectBounds(lyr);
       n++;
     } catch (e) { console.warn('[GéoDash] Route:', r.name, e); }
   });
 
-  /* ── Inondations ──────────────────────────────────── */
   (data.floods || []).forEach(function (f) {
     var geo = f.geojson;
-    if (!geo) return;
+    if (!geo || !geo.type) return;
     try {
       var COLORS = {
         faible:   GD_COLORS.flood_faible,
@@ -372,25 +337,86 @@ function _renderData(data) {
         eleve:    GD_COLORS.flood_eleve,
         critique: GD_COLORS.flood_critique,
       };
-      var c    = COLORS[f.risk_level] || GD_COLORS.flood;
-      var opts = { color: c, fillColor: c, weight: 2, opacity: .9, fillOpacity: .25 };
-      var coords;
+      var c   = COLORS[f.risk_level] || GD_COLORS.flood;
+      var lyr = null;
+
       if (geo.type === 'Polygon') {
-        coords = geo.coordinates[0].map(function (c) { return [c[1], c[0]]; });
-      } else if (geo.type === 'MultiPolygon') {
-        coords = geo.coordinates.map(function (p) {
-          return p[0].map(function (c) { return [c[1], c[0]]; });
+        var coords = geo.coordinates[0].map(function (pt) { return [pt[1], pt[0]]; });
+        if (coords.length < 3) return;
+        lyr = L.polygon(coords, {
+          color: c, fillColor: c, weight: 2, opacity: .9, fillOpacity: .25,
         });
-      } else return;
-      var lyr = L.polygon(coords, opts);
-      lyr.on('mouseover', function (e) {
-        this.setStyle({ fillOpacity: .5, weight: 3, color: '#fff' });
-        L.DomUtil.addClass(e.target._path, 'gd-hover');
-      });
-      lyr.on('mouseout', function (e) {
-        this.setStyle({ fillOpacity: .25, weight: 2, color: c });
-        L.DomUtil.removeClass(e.target._path, 'gd-hover');
-      });
+        lyr.on('mouseover', function (e) {
+          this.setStyle({ fillOpacity: .5, weight: 3, color: '#fff' });
+          L.DomUtil.addClass(e.target._path, 'gd-hover');
+        });
+        lyr.on('mouseout', function (e) {
+          this.setStyle({ fillOpacity: .25, weight: 2, color: c });
+          L.DomUtil.removeClass(e.target._path, 'gd-hover');
+        });
+
+      } else if (geo.type === 'MultiPolygon') {
+        var rings = geo.coordinates.map(function (p) {
+          return p[0].map(function (pt) { return [pt[1], pt[0]]; });
+        });
+        lyr = L.polygon(rings, {
+          color: c, fillColor: c, weight: 2, opacity: .9, fillOpacity: .25,
+        });
+        lyr.on('mouseover', function (e) {
+          this.setStyle({ fillOpacity: .5, weight: 3, color: '#fff' });
+          L.DomUtil.addClass(e.target._path, 'gd-hover');
+        });
+        lyr.on('mouseout', function (e) {
+          this.setStyle({ fillOpacity: .25, weight: 2, color: c });
+          L.DomUtil.removeClass(e.target._path, 'gd-hover');
+        });
+
+      } else if (geo.type === 'LineString') {
+        var coords = geo.coordinates.map(function (pt) { return [pt[1], pt[0]]; });
+        if (coords.length < 2) return;
+        var shadow = L.polyline(coords, {
+          color: 'rgba(0,0,0,.3)', weight: 7, opacity: 1,
+          lineCap: 'round', lineJoin: 'round', interactive: false,
+        });
+        lFloods.addLayer(shadow);
+        lyr = L.polyline(coords, {
+          color: c, weight: 4, opacity: .85,
+          lineCap: 'round', lineJoin: 'round',
+          dashArray: f.risk_level === 'faible' ? '8,5' : null,
+        });
+        lyr.on('mouseover', function (e) {
+          this.setStyle({ weight: 7, opacity: 1 });
+          shadow.setStyle({ weight: 10 });
+          L.DomUtil.addClass(e.target._path, 'gd-hover');
+        });
+        lyr.on('mouseout', function (e) {
+          this.setStyle({ weight: 4, opacity: .85 });
+          shadow.setStyle({ weight: 7 });
+          L.DomUtil.removeClass(e.target._path, 'gd-hover');
+        });
+
+      } else if (geo.type === 'MultiLineString') {
+        var segments = geo.coordinates.map(function (seg) {
+          return seg.map(function (pt) { return [pt[1], pt[0]]; });
+        });
+        lyr = L.polyline(segments, {
+          color: c, weight: 4, opacity: .85,
+          lineCap: 'round', lineJoin: 'round',
+        });
+        lyr.on('mouseover', function (e) {
+          this.setStyle({ weight: 7, opacity: 1 });
+          L.DomUtil.addClass(e.target._path, 'gd-hover');
+        });
+        lyr.on('mouseout', function (e) {
+          this.setStyle({ weight: 4, opacity: .85 });
+          L.DomUtil.removeClass(e.target._path, 'gd-hover');
+        });
+
+      } else {
+        console.debug('[GéoDash] Flood géom non supportée:', geo.type, f.name);
+        return;
+      }
+
       lyr.bindPopup(_popupFlood(f), { maxWidth: 280, className: 'gd-popup', autoPanPadding: [50,50] });
       lyr._gdMeta = { type: 'flood', id: f.id, name: f.name, color: c };
       lFloods.addLayer(lyr);
@@ -399,7 +425,6 @@ function _renderData(data) {
     } catch (e) { console.warn('[GéoDash] Flood:', f.name, e); }
   });
 
-  /* ── Végétation ───────────────────────────────────── */
   (data.vegetation || []).forEach(function (v) {
     var geo = v.geojson;
     if (!geo) return;
@@ -415,7 +440,14 @@ function _renderData(data) {
       var coords;
       if (geo.type === 'Polygon') {
         coords = geo.coordinates[0].map(function (c) { return [c[1], c[0]]; });
-      } else return;
+      } else if (geo.type === 'MultiPolygon') {
+        coords = geo.coordinates.map(function (p) {
+          return p[0].map(function (c) { return [c[1], c[0]]; });
+        });
+      } else {
+        console.debug('[GéoDash] Veg géom non supportée:', geo.type, v.name);
+        return;
+      }
       var lyr = L.polygon(coords, opts);
       lyr.on('mouseover', function (e) {
         this.setStyle({ fillOpacity: .45, opacity: 1, weight: 2.5, dashArray: null });
@@ -433,7 +465,6 @@ function _renderData(data) {
     } catch (e) { console.warn('[GéoDash] Veg:', v.name, e); }
   });
 
-  /* flyToBounds avec délai pour laisser setView s'installer */
   if (_allBounds.length) {
     setTimeout(function () {
       if (map && _mapReady) {
@@ -444,7 +475,12 @@ function _renderData(data) {
     }, 250);
   }
 
-  toast(n > 0 ? n + ' objets chargés' : 'Aucune donnée géospatiale', n > 0 ? 'ok' : 'nfo');
+  /* Score dégradation — calculé depuis les routes rendues */
+  updateDegradationScore(data.routes || []);
+
+  if (n > 0) {
+    toast(n + ' objets chargés', 'ok');
+  }
 }
 
 function _collectBounds(lyr) {
@@ -455,10 +491,72 @@ function _collectBounds(lyr) {
 }
 
 
-/* ── Popups Leaflet ──────────────────────────────────────
-   Structure : .popup-hdr / .popup-body / .popup-footer
-   Styles correspondants dans dashboard.css → .gd-popup
-─────────────────────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════
+   SCORE DÉGRADATION
+   Calcule en temps réel le % de routes en mauvais état.
+   Appelé depuis _renderData() après chaque chargement de zone.
+══════════════════════════════════════════════════════════ */
+
+/**
+ * @param {Array} routes - data.routes depuis l'API (chaque objet a condition_score)
+ */
+function updateDegradationScore(routes) {
+  var elVal = document.getElementById('kpiDegradation');
+  var elSub = document.getElementById('kpiDegradationSub');
+  var elBar = document.getElementById('kpiDegradationBar');
+
+  if (!routes || routes.length === 0) {
+    if (elVal) { elVal.textContent = '—'; elVal.className = 'kpi-value danger'; }
+    if (elSub) elSub.textContent = 'Aucune route chargée';
+    if (elBar) elBar.style.width = '0%';
+    return;
+  }
+
+  var total    = routes.length;
+  var degraded = 0;
+  var critical = 0;
+
+  routes.forEach(function (r) {
+    var sc = parseFloat(r.condition_score);
+    if (isNaN(sc)) return;
+    if (sc < 40)      critical++;
+    else if (sc < 70) degraded++;
+  });
+
+  var affected = degraded + critical;
+  var pct      = Math.round((affected / total) * 100);
+
+  var color, cssClass;
+  if (pct < 20) {
+    color = 'var(--green2)'; cssClass = 'kpi-value good';
+  } else if (pct < 50) {
+    color = '#e67e22';       cssClass = 'kpi-value warn';
+  } else {
+    color = 'var(--red)';   cssClass = 'kpi-value danger';
+  }
+
+  if (elVal) {
+    elVal.textContent = pct + ' %';
+    elVal.className   = cssClass;
+  }
+
+  if (elSub) {
+    var parts = [];
+    if (degraded > 0) parts.push(degraded + ' dégradé' + (degraded > 1 ? 's' : ''));
+    if (critical > 0) parts.push(critical + ' critique' + (critical > 1 ? 's' : ''));
+    elSub.textContent = parts.length
+      ? parts.join(', ') + ' / ' + total + ' routes'
+      : 'Toutes les routes sont en bon état';
+  }
+
+  if (elBar) {
+    elBar.style.width      = Math.min(pct, 100) + '%';
+    elBar.style.background = color;
+  }
+}
+
+
+/* ── Popups Leaflet ─────────────────────────────────────────────────────────── */
 
 function _bar(pct, color, labelLeft, labelRight) {
   var labels = (labelLeft || labelRight)
@@ -483,12 +581,10 @@ function _popupRoad(r) {
   var c  = r.color || _scoreColor(sc);
   var status = (r.status_label || r.status || '—');
   return '<div class="popup-inner">'
-    /* En-tête */
     + '<div class="popup-hdr">'
-    +   '<div class="popup-type">&#x2015; Route</div>'
+    +   '<div class="popup-type">Route</div>'
     +   '<div class="popup-name">' + (r.name || 'Route inconnue') + '</div>'
     + '</div>'
-    /* Corps */
     + '<div class="popup-body">'
     +   '<div class="popup-row">'
     +     '<span class="popup-lbl">Score état</span>'
@@ -509,7 +605,6 @@ function _popupRoad(r) {
       ? '<div class="popup-notes">' + r.notes + '</div>'
       : '')
     + '</div>'
-    /* Pied */
     + '<div class="popup-footer">'
     +   '<span class="popup-badge badge-' + (r.status || 'ferme') + '">'
     +     '<span class="badge-dot"></span>' + status
@@ -529,7 +624,7 @@ function _popupFlood(f) {
   var c = COLORS[f.risk_level] || GD_COLORS.flood;
   return '<div class="popup-inner">'
     + '<div class="popup-hdr">'
-    +   '<div class="popup-type">&#x26A1; Zone inondation</div>'
+    +   '<div class="popup-type">Zone inondation</div>'
     +   '<div class="popup-name">' + (f.name || 'Zone inconnue') + '</div>'
     + '</div>'
     + '<div class="popup-body">'
@@ -555,7 +650,7 @@ function _popupFlood(f) {
 
 function _popupVeg(v) {
   var ndvi = v.ndvi_value || 0;
-  var ndviPct = Math.round(((ndvi + 1) / 2) * 100);   /* NDVI [-1,1] → [0,100] */
+  var ndviPct = Math.round(((ndvi + 1) / 2) * 100);
   var COLORS = {
     sparse:     GD_COLORS.veg_sparse,
     moderate:   GD_COLORS.veg_moderate,
@@ -565,7 +660,7 @@ function _popupVeg(v) {
   var c = COLORS[v.density_class] || GD_COLORS.vegetation;
   return '<div class="popup-inner">'
     + '<div class="popup-hdr">'
-    +   '<div class="popup-type">&#x1F333; Végétation</div>'
+    +   '<div class="popup-type">Végétation</div>'
     +   '<div class="popup-name">' + (v.name || 'Zone végétale') + '</div>'
     + '</div>'
     + '<div class="popup-body">'
@@ -603,32 +698,207 @@ function toggleLayer(type, el) {
   layerVis[type] ? map.addLayer(lg) : map.removeLayer(lg);
 }
 
+var _activeLayer = 'all';
+
 /* ══════════════════════════════════════════════════════════
-   ÉTAT ACTIF — KPI cards
+   LÉGENDE DYNAMIQUE
 ══════════════════════════════════════════════════════════ */
-var _activeLayer = 'all';   /* couche actuellement mise en avant */
+
+var _LEGEND_CONTENT = {
+  all: function () {
+    return [
+      { type: 'title',   text: 'Légende' },
+      { type: 'section', text: 'Routes' },
+      { type: 'line',  color: '#28b857', label: 'Bon état  (≥ 70/100)' },
+      { type: 'line',  color: '#e67e22', label: 'Dégradé  (40-69/100)' },
+      { type: 'line',  color: '#f43f5e', label: 'Critique  (10-39/100)' },
+      { type: 'line',  color: '#94a3b8', label: 'Fermé  (< 10/100)', dashed: true },
+      { type: 'sep' },
+      { type: 'section', text: 'Zones hydrographiques' },
+      { type: 'poly',  color: '#22d3ee', label: 'Risque faible  (< 25)' },
+      { type: 'poly',  color: '#3b82f6', label: 'Risque modéré  (25-49)' },
+      { type: 'poly',  color: '#f97316', label: 'Risque élevé  (50-74)' },
+      { type: 'poly',  color: '#dc2626', label: 'Risque critique  (≥ 75)' },
+      { type: 'sep' },
+      { type: 'section', text: 'Végétation (OSM)' },
+      { type: 'poly',  color: '#bef264', label: 'Éparse  (NDVI < 0.20)',  opacity: .6 },
+      { type: 'poly',  color: '#4ade80', label: 'Modérée  (0.20-0.39)',   opacity: .6 },
+      { type: 'poly',  color: '#16a34a', label: 'Dense  (0.40-0.59)',     opacity: .6 },
+      { type: 'poly',  color: '#14532d', label: 'Très dense  (≥ 0.60)',   opacity: .6 },
+    ].concat(_legendGeeRows());
+  },
+  roads: function () {
+    return [
+      { type: 'title', text: 'Routes — État' },
+      { type: 'scale-bar',
+        label: 'Score de condition (0-100)',
+        stops: [
+          { pct: 0,   color: '#94a3b8', label: '0' },
+          { pct: 10,  color: '#ef4444', label: '10' },
+          { pct: 40,  color: '#f97316', label: '40' },
+          { pct: 70,  color: '#22c55e', label: '70' },
+          { pct: 100, color: '#0e9f6e', label: '100' },
+        ]
+      },
+      { type: 'sep' },
+      { type: 'line',  color: '#28b857', label: 'Bon — Surface praticable' },
+      { type: 'line',  color: '#e67e22', label: 'Dégradé — Ralentissement' },
+      { type: 'line',  color: '#f43f5e', label: 'Critique — Risque accès' },
+      { type: 'line',  color: '#94a3b8', label: 'Fermé — Inaccessible', dashed: true },
+      { type: 'sep' },
+      { type: 'info',  text: 'Score calculé depuis les tags OSM (smoothness, surface, highway)' },
+    ];
+  },
+  floods: function () {
+    return [
+      { type: 'title', text: 'Inondations — Risque' },
+      { type: 'scale-bar',
+        label: 'Score de risque (0-100)',
+        stops: [
+          { pct: 0,   color: '#22d3ee', label: '0' },
+          { pct: 25,  color: '#3b82f6', label: '25' },
+          { pct: 50,  color: '#f97316', label: '50' },
+          { pct: 75,  color: '#dc2626', label: '75' },
+          { pct: 100, color: '#7f1d1d', label: '100' },
+        ]
+      },
+      { type: 'sep' },
+      { type: 'poly',  color: '#22d3ee', label: 'Faible  — Hors saison sèche' },
+      { type: 'poly',  color: '#3b82f6', label: 'Modéré — Surveillance' },
+      { type: 'poly',  color: '#f97316', label: 'Élevé  — Précautions requises' },
+      { type: 'poly',  color: '#dc2626', label: 'Critique — Évacuation possible' },
+      { type: 'line',  color: '#3b82f6', label: 'Cours d\'eau (rivière / canal)' },
+      { type: 'sep' },
+    ].concat(_legendGeeRows('flood'));
+  },
+  vegetation: function () {
+    return [
+      { type: 'title', text: 'Végétation — NDVI' },
+      { type: 'scale-bar',
+        label: 'Indice NDVI (-1 à +1)',
+        stops: [
+          { pct: 0,   color: '#d73027', label: '-1' },
+          { pct: 30,  color: '#fee08b', label: '0' },
+          { pct: 60,  color: '#66bd63', label: '0.4' },
+          { pct: 100, color: '#1a9850', label: '+1' },
+        ]
+      },
+      { type: 'sep' },
+      { type: 'poly',  color: '#bef264', label: 'Éparse  NDVI < 0.20',    opacity: .6 },
+      { type: 'poly',  color: '#4ade80', label: 'Modérée NDVI 0.20-0.39', opacity: .6 },
+      { type: 'poly',  color: '#16a34a', label: 'Dense   NDVI 0.40-0.59', opacity: .6 },
+      { type: 'poly',  color: '#14532d', label: 'Très dense NDVI ≥ 0.60', opacity: .6 },
+      { type: 'sep' },
+      { type: 'info', text: 'NDVI > 0 = végétation, = 0 = sol nu, < 0 = eau/nuage' },
+    ].concat(_legendGeeRows('ndvi'));
+  },
+  degradation: function () {
+    return [
+      { type: 'title', text: 'Dégradation routes' },
+      { type: 'scale-bar',
+        label: 'Score de dégradation (0-100 %)',
+        stops: [
+          { pct: 0,   color: '#22c55e', label: '0 %' },
+          { pct: 20,  color: '#f97316', label: '20 %' },
+          { pct: 50,  color: '#ef4444', label: '50 %' },
+          { pct: 100, color: '#7f1d1d', label: '100 %' },
+        ]
+      },
+      { type: 'sep' },
+      { type: 'line',  color: '#22c55e', label: '< 20 % — Faible dégradation' },
+      { type: 'line',  color: '#f97316', label: '20-50 % — Dégradation modérée' },
+      { type: 'line',  color: '#ef4444', label: '> 50 % — Dégradation sévère' },
+      { type: 'sep' },
+      { type: 'info', text: '% de segments avec score < 70/100 (dégradé ou critique)' },
+    ];
+  },
+};
+
+function _legendGeeRows(context) {
+  var rows = [];
+  if (lGeeNdvi && context !== 'flood') {
+    rows.push({ type: 'sep' });
+    rows.push({ type: 'section', text: 'Satellite Sentinel-2 (GEE)' });
+    rows.push({ type: 'scale-bar',
+      label: 'NDVI satellite',
+      stops: [
+        { pct: 0,   color: '#d73027', label: '0.0' },
+        { pct: 50,  color: '#fee08b', label: '0.4' },
+        { pct: 100, color: '#1a9850', label: '0.8' },
+      ]
+    });
+  }
+  if (lGeeFlood && context !== 'ndvi') {
+    rows.push({ type: 'sep' });
+    rows.push({ type: 'section', text: 'SAR Sentinel-1 (GEE)' });
+    rows.push({ type: 'poly', color: '#3b82f6', label: 'Zone inondée détectée (SAR)', opacity: .7 });
+    rows.push({ type: 'info', text: 'Détection radar indépendante des nuages' });
+  }
+  return rows;
+}
+
+function _buildLegendHTML(rows) {
+  var html = '';
+  rows.forEach(function (row) {
+    switch (row.type) {
+      case 'title':
+        html += '<div class="ml-ttl">' + row.text + '</div>';
+        break;
+      case 'section':
+        html += '<div class="ml-section">' + row.text + '</div>';
+        break;
+      case 'sep':
+        html += '<div class="ml-sep"></div>';
+        break;
+      case 'line':
+        var style = row.dashed
+          ? 'background:repeating-linear-gradient(90deg,' + row.color + ' 0 5px,transparent 5px 8px);height:3px;'
+          : 'background:' + row.color + ';height:3px;';
+        html += '<div class="ml-row">'
+          + '<div class="ml-line" style="' + style + '"></div>'
+          + '<span>' + row.label + '</span>'
+          + '</div>';
+        break;
+      case 'poly':
+        html += '<div class="ml-row">'
+          + '<div class="ml-poly" style="background:' + row.color + ';opacity:' + (row.opacity || .8) + '"></div>'
+          + '<span>' + row.label + '</span>'
+          + '</div>';
+        break;
+      case 'scale-bar':
+        var grad = row.stops.map(function (s) { return s.color + ' ' + s.pct + '%'; }).join(', ');
+        var ticks = row.stops.map(function (s) {
+          return '<span style="left:' + s.pct + '%">' + s.label + '</span>';
+        }).join('');
+        html += '<div class="ml-scale">'
+          + '<div class="ml-scale-lbl">' + row.label + '</div>'
+          + '<div class="ml-scale-bar" style="background:linear-gradient(90deg,' + grad + ')"></div>'
+          + '<div class="ml-scale-ticks">' + ticks + '</div>'
+          + '</div>';
+        break;
+      case 'info':
+        html += '<div class="ml-info">' + row.text + '</div>';
+        break;
+    }
+  });
+  return html;
+}
+
+function updateLegend(type) {
+  var el = document.querySelector('.map-legend');
+  if (!el) return;
+  var fn = _LEGEND_CONTENT[type] || _LEGEND_CONTENT.all;
+  el.innerHTML = _buildLegendHTML(fn());
+}
 
 function _setKpiActive(type) {
-  /* Retire l'état actif de toutes les KPI cards */
   document.querySelectorAll('.kpi-card').forEach(function (c) {
     c.classList.remove('kpi-active');
   });
-  /* Active la card correspondante */
-  var mapping = { roads: 'roads', floods: 'floods', vegetation: 'vegetation' };
-  var target = mapping[type];
-  if (target) {
-    var card = document.querySelector('.kpi-card[data-layer="' + target + '"]');
-    if (card) card.classList.add('kpi-active');
-  }
+  var card = document.querySelector('.kpi-card[data-layer="' + type + '"]');
+  if (card) card.classList.add('kpi-active');
 }
 
-/* ══════════════════════════════════════════════════════════
-   FLASH / PULSE COUCHE — retour visuel après clic KPI
-   ─────────────────────────────────────────────────────────
-   Fait clignoter brièvement l'opacité de la couche active
-   pour confirmer visuellement que le clic a eu un effet,
-   même si la carte ne bouge pas (vue déjà centrée).
-══════════════════════════════════════════════════════════ */
 function _pulseLayer(type) {
   var targets = type === 'all'
     ? ['roads', 'floods', 'vegetation']
@@ -639,15 +909,9 @@ function _pulseLayer(type) {
     if (!lg) return;
     lg.getLayers().forEach(function (lyr) {
       if (!lyr.setStyle || lyr.options.interactive === false) return;
-      var orig = {
-        opacity:     lyr.options.opacity,
-        fillOpacity: lyr.options.fillOpacity,
-      };
-      /* Flash lumineux : opacité × 1 → flash → retour */
+      var orig = { opacity: lyr.options.opacity, fillOpacity: lyr.options.fillOpacity };
       lyr.setStyle({ opacity: 1, fillOpacity: Math.min((orig.fillOpacity || 0) + .35, 1) });
-      setTimeout(function () {
-        lyr.setStyle({ opacity: orig.opacity, fillOpacity: orig.fillOpacity });
-      }, 320);
+      setTimeout(function () { lyr.setStyle({ opacity: orig.opacity, fillOpacity: orig.fillOpacity }); }, 320);
     });
   });
 }
@@ -655,7 +919,6 @@ function _pulseLayer(type) {
 function setLayer(type, btn) {
   _activeLayer = type;
 
-  /* ── Toolbar (boutons carte) ──────────────────────── */
   document.querySelectorAll('[data-set-layer]').forEach(function (b) {
     b.classList.remove('active');
   });
@@ -666,22 +929,20 @@ function setLayer(type, btn) {
     if (found) found.classList.add('active');
   }
 
-  /* ── Nav-items ────────────────────────────────────── */
   document.querySelectorAll('.nav-item[data-set-layer]').forEach(function (ni) {
     ni.classList.toggle('active', ni.dataset.setLayer === type);
   });
 
-  /* ── KPI cards ────────────────────────────────────── */
   _setKpiActive(type);
 
-  /* ── Toggles sidebar ─────────────────────────────── */
   if (!map) return;
 
   var vis = {
-    all:        { roads: 1, floods: 1, vegetation: 1 },
-    roads:      { roads: 1, floods: 0, vegetation: 0 },
-    floods:     { roads: 0, floods: 1, vegetation: 0 },
-    vegetation: { roads: 0, floods: 0, vegetation: 1 },
+    all:         { roads: 1, floods: 1, vegetation: 1 },
+    roads:       { roads: 1, floods: 0, vegetation: 0 },
+    floods:      { roads: 0, floods: 1, vegetation: 0 },
+    vegetation:  { roads: 0, floods: 0, vegetation: 1 },
+    degradation: { roads: 1, floods: 0, vegetation: 0 },
   }[type] || { roads: 1, floods: 1, vegetation: 1 };
 
   Object.keys(vis).forEach(function (k) {
@@ -694,12 +955,9 @@ function setLayer(type, btn) {
     if (toggle) toggle.classList.toggle('off', !v);
   });
 
-  /* ── Vol vers la couche ───────────────────────────── */
-  var flew = _flyToLayer(type);
-
-  /* ── Pulse de confirmation ────────────────────────── */
-  /* Délai : si flyTo en cours, pulse après l'animation */
+  var flew = _flyToLayer(type === 'degradation' ? 'roads' : type);
   setTimeout(function () { _pulseLayer(type); }, flew ? 900 : 80);
+  updateLegend(type);
 }
 
 function _flyToLayer(type) {
@@ -709,9 +967,11 @@ function _flyToLayer(type) {
   var lg = layerRef[type] ? layerRef[type]() : null;
   if (!lg) return false;
 
-  /* Collecter les bounds de TOUTES les sous-couches visibles */
-  var bounds = [];
+  var bounds      = [];
+  var totalLayers = 0;
+
   lg.getLayers().forEach(function (l) {
+    totalLayers++;
     try {
       var b = l.getBounds ? l.getBounds() : null;
       if (b && b.isValid()) bounds.push(b.getSouthWest(), b.getNorthEast());
@@ -726,8 +986,14 @@ function _flyToLayer(type) {
     return true;
   }
 
-  /* Pas de données dans la couche → toast informatif */
-  toast('Aucune donnée pour cette couche', 'nfo');
+  if (totalLayers > 0) {
+    map.flyTo([_initLat, _initLng], 11, { duration: 1.1 });
+    return true;
+  }
+
+  var layerNames = { roads: 'routes', floods: 'zones inondation', vegetation: 'zones végétation' };
+  toast('Aucune ' + (layerNames[type] || 'donnée') + ' pour cette zone', 'nfo');
+  map.flyTo([_initLat, _initLng], 11, { duration: 1.1 });
   return false;
 }
 
@@ -745,13 +1011,66 @@ function flyToAll() {
 
 
 /* ══════════════════════════════════════════════════════════
+   GOOGLE EARTH ENGINE
+══════════════════════════════════════════════════════════ */
+
+function refreshGeeLayer(zoneCode) {
+  if (!map || !_mapReady) return;
+
+  var base = zoneCode ? '?zone=' + encodeURIComponent(zoneCode) : '';
+
+  fetch('/api/gee/ndvi/' + base)
+    .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+    .then(function (data) {
+      if (!data || data.error) { console.warn('[GEE NDVI]', data && data.error); return; }
+      if (lGeeNdvi) { map.removeLayer(lGeeNdvi); lGeeNdvi = null; }
+
+      lGeeNdvi = L.tileLayer(data.tiles_url, {
+        opacity: 0.55, maxNativeZoom: 18, maxZoom: 22, attribution: 'NDVI · Sentinel-2 · GEE',
+      });
+      lGeeNdvi.addTo(map);
+
+      var ndviVal = parseFloat(data.mean_ndvi || 0);
+      var ndviEl  = document.getElementById('kpiNdvi')
+                 || document.querySelector('.kpi-card[data-layer="vegetation"] .kpi-value');
+      if (ndviEl) {
+        ndviEl.textContent = ndviVal.toFixed(3);
+        ndviEl.className   = ndviEl.className.replace(/\b(good|warn|danger)\b/g, '');
+        ndviEl.classList.add(ndviVal > 0.4 ? 'good' : ndviVal > 0.2 ? 'warn' : 'danger');
+      }
+      var ndviSub = document.querySelector('.kpi-card[data-layer="vegetation"] .kpi-sub');
+      if (ndviSub && data.coverage_percent !== undefined) {
+        ndviSub.textContent = data.coverage_percent + '% couverture · satellite';
+      }
+
+      toast('Couche NDVI chargée (' + (data.image_date || '') + ')', 'ok');
+      updateLegend(_activeLayer);
+    })
+    .catch(function (err) { console.warn('[GEE NDVI] Erreur:', err); });
+
+  fetch('/api/gee/flood/' + base)
+    .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+    .then(function (data) {
+      if (!data || data.error) { console.warn('[GEE Flood]', data && data.error); return; }
+      if (lGeeFlood) { map.removeLayer(lGeeFlood); lGeeFlood = null; }
+
+      lGeeFlood = L.tileLayer(data.tiles_url, {
+        opacity: 0.65, maxNativeZoom: 18, maxZoom: 22, attribution: 'SAR · Sentinel-1 · GEE',
+      });
+      lGeeFlood.addTo(map);
+
+      toast('Couche SAR chargée — risque ' + (data.risk_level || ''), 'ok');
+      updateLegend(_activeLayer);
+    })
+    .catch(function (err) { console.warn('[GEE Flood] Erreur:', err); });
+}
+
+
+/* ══════════════════════════════════════════════════════════
    NAVIGATION & ALERTES
 ══════════════════════════════════════════════════════════ */
 
 function switchZone(code) {
-  // On part de l'URL actuelle pour conserver le chemin de l'app
-  // (qu'elle soit montée sur /, /dashboard/, /geo/, peu importe).
-  // URLSearchParams gère l'encodage proprement — pas de concaténation à la main.
   var url = new URL(window.location.href);
   if (code) {
     url.searchParams.set('zone', code);
@@ -761,13 +1080,34 @@ function switchZone(code) {
   window.location.href = url.toString();
 }
 
-/* Marqueur pulsant placé sur la localisation d'une alerte */
+/**
+ * Met à jour les liens d'export avec la zone active.
+ */
+function _updateExportLinks() {
+  var suffix = _activeZoneCode ? ('?zone=' + encodeURIComponent(_activeZoneCode)) : '';
+
+  var csvLink = document.querySelector('a[href*="/api/alerts/export/"]');
+  if (csvLink) {
+    csvLink.href  = '/api/alerts/export/' + suffix;
+    csvLink.title = _activeZoneCode
+      ? 'Exporter les alertes de ' + _activeZoneCode + ' (CSV)'
+      : 'Exporter toutes les alertes (CSV)';
+  }
+
+  var geoLink = document.querySelector('a[href*="/api/roads/export/"]');
+  if (geoLink) {
+    geoLink.href  = '/api/roads/export/' + suffix;
+    geoLink.title = _activeZoneCode
+      ? 'Exporter les routes de ' + _activeZoneCode + ' (GeoJSON)'
+      : 'Exporter toutes les routes (GeoJSON)';
+  }
+}
+
 var _alertMarker = null;
 
 function _placeAlertMarker(lat, lng, color) {
   if (_alertMarker) { map.removeLayer(_alertMarker); _alertMarker = null; }
 
-  /* Icône SVG avec cercle pulsant */
   var icon = L.divIcon({
     className: '',
     iconSize:  [36, 36],
@@ -780,51 +1120,80 @@ function _placeAlertMarker(lat, lng, color) {
   _alertMarker = L.marker([lat, lng], { icon: icon, zIndexOffset: 1000 });
   _alertMarker.addTo(map);
 
-  /* Disparaît automatiquement après 8 secondes */
   setTimeout(function () {
     if (_alertMarker) { map.removeLayer(_alertMarker); _alertMarker = null; }
   }, 8000);
 }
 
-function focusAlert(lat, lng, category) {
+/**
+ * Localise une alerte sur la carte.
+ *
+ * Stratégie de résolution des coordonnées (ordre de priorité) :
+ *   1. lat/lng de l'alerte elle-même si non nuls
+ *   2. lat/lng du centroïde de la zone (zone_lat / zone_lng passés depuis le template)
+ *   3. Zoom sur la couche correspondante si les deux précédents échouent
+ *   4. Recentrage sur la zone courante en dernier recours
+ *
+ * @param {number} lat        - latitude de l'alerte (peut être 0)
+ * @param {number} lng        - longitude de l'alerte (peut être 0)
+ * @param {string} category   - 'road' | 'flood' | 'vegetation'
+ * @param {number} zoneLat    - latitude du centroïde de la zone (fallback)
+ * @param {number} zoneLng    - longitude du centroïde de la zone (fallback)
+ */
+function focusAlert(lat, lng, category, zoneLat, zoneLng) {
   if (!map || !_mapReady) return;
-  var la = parseFloat(lat);
-  var ln = parseFloat(lng);
 
   var color = GD_COLORS[category] || GD_COLORS.alert;
-
-  // Zoom cible selon catégorie — une route mérite plus de précision
-  // qu'une zone d'inondation qui couvre souvent plusieurs km².
   var ZOOM_MAP = { road: 17, flood: 14, vegetation: 14 };
   var targetZoom = ZOOM_MAP[category] || 16;
 
+  /* 1. Coordonnées précises de l'alerte */
+  var la = parseFloat(lat);
+  var ln = parseFloat(lng);
   if (!isNaN(la) && !isNaN(ln) && (Math.abs(la) > 0.0001 || Math.abs(ln) > 0.0001)) {
     map.flyTo([la, ln], targetZoom, { duration: 1.2, easeLinearity: .25 });
-    // On place le marqueur après l'animation — pas pendant, ça évite le décalage visuel
     setTimeout(function () { _placeAlertMarker(la, ln, color); }, 700);
-    toast('Zone d\'alerte localisée', 'nfo');
-  } else {
-    // Pas de coordonnées → fallback vers la couche de la catégorie
-    var layerMap = { road: 'roads', flood: 'floods', vegetation: 'vegetation' };
-    var layerKey = layerMap[category];
-    if (layerKey) {
-      var flew = _flyToLayer(layerKey);
-      if (!flew) toast('Coordonnées manquantes pour cette alerte', 'nfo');
-    } else {
-      flyToAll();
-    }
+    toast('Alerte localisée', 'nfo');
+    return;
   }
+
+  /* 2. Centroïde de la zone (transmis via data-zone-lat / data-zone-lng) */
+  var zla = parseFloat(zoneLat);
+  var zln = parseFloat(zoneLng);
+  if (!isNaN(zla) && !isNaN(zln) && (Math.abs(zla) > 0.0001 || Math.abs(zln) > 0.0001)) {
+    map.flyTo([zla, zln], Math.min(targetZoom, 13), { duration: 1.2, easeLinearity: .25 });
+    setTimeout(function () { _placeAlertMarker(zla, zln, color); }, 700);
+    toast('Position approximative (centroïde de zone)', 'nfo');
+    return;
+  }
+
+  /* 3. Zoom sur la couche correspondante */
+  var layerMap = { road: 'roads', flood: 'floods', vegetation: 'vegetation' };
+  var layerKey = layerMap[category];
+  if (layerKey) {
+    var flew = _flyToLayer(layerKey);
+    if (flew) return;
+  }
+
+  /* 4. Dernier recours : recentrage sur la zone courante */
+  map.flyTo([_initLat, _initLng], 11, { duration: 1.1 });
+  toast('Coordonnées manquantes — zone approximative', 'nfo');
 }
 
-// Annule la requête précédente si elle traîne encore quand le timer relance.
-// Évite les réponses qui arrivent dans le mauvais ordre sur réseau lent.
 let _fetchAlertsCtrl = null;
 
+/**
+ * Rafraîchit le compteur d'alertes depuis l'API.
+ * CORRECTION : passe le code de zone dans la requête pour un comptage filtré.
+ */
 function refreshAlerts() {
   if (_fetchAlertsCtrl) _fetchAlertsCtrl.abort();
   _fetchAlertsCtrl = new AbortController();
 
-  fetch('/api/alerts/', { signal: _fetchAlertsCtrl.signal })
+  /* Filtrage par zone — clé de la correction du comptage */
+  var suffix = _activeZoneCode ? '?zone=' + encodeURIComponent(_activeZoneCode) : '';
+
+  fetch('/api/alerts/' + suffix, { signal: _fetchAlertsCtrl.signal })
     .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
     .then(function (d) {
       _fetchAlertsCtrl = null;
@@ -836,7 +1205,6 @@ function refreshAlerts() {
         cnt.classList.toggle('zero', count === 0);
       }
 
-      // textContent écraserait le SVG — on reconstruit le innerHTML complet.
       var pill = document.getElementById('alertPill');
       if (pill) {
         pill.className = 'alert-pill ' + (count > 0 ? 'hot' : 'ok');
@@ -850,7 +1218,6 @@ function refreshAlerts() {
       if (upd) upd.textContent = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
     })
     .catch(function (err) {
-      // AbortError = on a annulé nous-mêmes — pas une vraie erreur à logger
       if (err && err.name === 'AbortError') return;
       console.warn('[GéoDash] refreshAlerts:', err);
     });
@@ -858,12 +1225,9 @@ function refreshAlerts() {
 
 
 /* ══════════════════════════════════════════════════════════
-   GRAPHIQUES CHART.JS — adaptatifs au thème
+   GRAPHIQUES CHART.JS
 ══════════════════════════════════════════════════════════ */
 
-/**
- * Retourne les couleurs de rendu Chart.js selon le thème actif.
- */
 function _getChartTheme() {
   var dark = document.documentElement.getAttribute('data-theme') === 'dark';
   return {
@@ -875,6 +1239,87 @@ function _getChartTheme() {
     body:  dark ? '#8d9dc0'             : '#4a5578',
     bdr:   dark ? '#2c3850'             : '#d8dcea',
   };
+}
+
+
+/* ══════════════════════════════════════════════════════════
+   TOOLTIPS KPI
+══════════════════════════════════════════════════════════ */
+
+var _KPI_TOOLTIPS = {
+  roads: {
+    title:  'Santé routière',
+    body:   'Moyenne des scores de condition sur tous les segments de la zone. '
+          + 'Score calculé depuis les attributs OSM : type de voie, revêtement, '
+          + 'état déclaré (smoothness). ≥ 70 = bon état, 40-69 = dégradé, < 40 = critique.',
+    method: 'Source : OpenStreetMap via Overpass API',
+    color:  'var(--blue)',
+  },
+  floods: {
+    title:  'Risque inondation',
+    body:   'Score moyen de risque d\'inondation calculé par zone hydrographique. '
+          + 'Combinaison de la proximité aux cours d\'eau, du type d\'élément OSM '
+          + '(river, canal, wetland) et — quand disponible — des données SAR Sentinel-1 '
+          + 'via Google Earth Engine.',
+    method: 'Source : OSM + Sentinel-1 SAR (GEE)',
+    color:  'var(--teal)',
+  },
+  vegetation: {
+    title:  'NDVI moyen',
+    body:   'Indice de végétation (Normalized Difference Vegetation Index). '
+          + 'Valeur de -1 à +1 : > 0.6 = forêt dense, 0.2-0.6 = végétation modérée, '
+          + '< 0.2 = sol nu / urbain. '
+          + 'Valeur satellite (Sentinel-2) affichée quand GEE est disponible, '
+          + 'sinon valeur OSM estimée.',
+    method: 'Source : Sentinel-2 SR via GEE / OSM',
+    color:  'var(--green2)',
+  },
+  degradation: {
+    title:  'Score dégradation',
+    body:   'Proportion (%) de segments routiers dont le score de condition '
+          + 'est inférieur à 70/100 (état dégradé ou critique). '
+          + 'Calculé en temps réel depuis les routes chargées dans la zone. '
+          + '< 20 % = faible, 20-50 % = modérée, > 50 % = sévère.',
+    method: 'Calcul : routes (score < 70) ÷ total routes × 100',
+    color:  'var(--red)',
+  },
+};
+
+function _initKpiTooltips() {
+  document.querySelectorAll('.kpi-card[data-layer]').forEach(function (card) {
+    var key = card.dataset.layer;
+    var def = _KPI_TOOLTIPS[key];
+    if (!def) return;
+
+    var top = card.querySelector('.kpi-top');
+    if (!top || card.querySelector('.kpi-info-btn')) return;
+
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'kpi-info-btn';
+    btn.setAttribute('aria-label', 'En savoir plus sur ' + def.title);
+    btn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+
+    var tip = document.createElement('div');
+    tip.className = 'kpi-tooltip';
+    tip.setAttribute('role', 'tooltip');
+    tip.innerHTML = '<div class="kpi-tip-title" style="color:' + def.color + '">' + def.title + '</div>'
+      + '<div class="kpi-tip-body">' + def.body + '</div>'
+      + '<div class="kpi-tip-method">' + def.method + '</div>';
+
+    btn.appendChild(tip);
+
+    btn.addEventListener('mouseenter', function () { tip.classList.add('open'); });
+    btn.addEventListener('mouseleave', function () { tip.classList.remove('open'); });
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      tip.classList.toggle('open');
+    });
+
+    document.addEventListener('click', function () { tip.classList.remove('open'); });
+
+    top.appendChild(btn);
+  });
 }
 
 function initCharts(routesData, floodsData, avgScore) {
@@ -893,7 +1338,6 @@ function initCharts(routesData, floodsData, avgScore) {
     padding: 9, titleFont: mono, bodyFont: sans,
   };
 
-  /* Graphique barres — Routes */
   var rdCtx = document.getElementById('cRoad');
   if (rdCtx) {
     new Chart(rdCtx, {
@@ -919,7 +1363,6 @@ function initCharts(routesData, floodsData, avgScore) {
     });
   }
 
-  /* Graphique donut — Inondations */
   var flCtx = document.getElementById('cFlood');
   if (flCtx) {
     new Chart(flCtx, {
@@ -947,7 +1390,6 @@ function initCharts(routesData, floodsData, avgScore) {
     });
   }
 
-  /* Jauge score global */
   var score = parseFloat(avgScore) || 0;
   var gc    = score >= 70 ? '#00d97e' : score >= 40 ? '#f97316' : '#ef4444';
   var gBg   = document.documentElement.getAttribute('data-theme') === 'dark' ? '#1e253a' : '#eef3fd';
@@ -997,25 +1439,8 @@ function toast(msg, type) {
 
 
 /* ══════════════════════════════════════════════════════════
-   PARAMÈTRES — Drawer + Persistance localStorage
-   ─────────────────────────────────────────────────────────
-   Structure localStorage clé 'gd-settings' :
-   {
-     theme     : 'light'|'dark',
-     density   : 'compact'|'normal'|'comfortable',
-     tileStyle : 'dark'|'light'|'osm'|'topo'|'satellite',
-     zoomDefault: 9,
-     showScale : true,
-     showLegend: true,
-     coordFmt  : 'DD'|'DMS',
-     refreshInterval: 60,
-     alertMinLevel: 'info'|'warning'|'danger'|'critical',
-     soundAlerts : false,
-     lang        : 'fr'|'en',
-   }
+   PARAMÈTRES
 ══════════════════════════════════════════════════════════ */
-
-/* ─── Chargement / Sauvegarde ─────────────────────────── */
 
 function _loadSettings() {
   try {
@@ -1026,18 +1451,9 @@ function _loadSettings() {
   } catch (e) {
     _settings = Object.assign({}, GD_SETTINGS_DEFAULT);
   }
-
-  /* ── Synchronisation thème ──────────────────────────────────
-     gd-theme est la SOURCE DE VÉRITÉ (écrite par toggleTheme
-     et lue par le script anti-flash dans <head>).
-     On s'assure que _settings.theme lui est toujours identique
-     pour qu'applySettings() ne vienne pas l'écraser.
-  ─────────────────────────────────────────────────────────── */
   try {
     var storedTheme = localStorage.getItem('gd-theme');
-    if (storedTheme === 'dark' || storedTheme === 'light') {
-      _settings.theme = storedTheme;
-    }
+    if (storedTheme === 'dark' || storedTheme === 'light') _settings.theme = storedTheme;
   } catch (e) {}
 }
 
@@ -1045,20 +1461,15 @@ function _saveSettings() {
   try { localStorage.setItem('gd-settings', JSON.stringify(_settings)); } catch (e) {}
 }
 
-/* ─── Ouverture / Fermeture du drawer ─────────────────── */
-
 function openSettings() {
   _loadSettings();
   _populateSettingsUI();
-
   var drawer   = document.getElementById('settingsDrawer');
   var backdrop = document.getElementById('settingsBackdrop');
   if (!drawer || !backdrop) return;
   backdrop.classList.add('open');
   drawer.classList.add('open');
-  document.body.style.overflow = 'hidden';   /* bloque le scroll derrière */
-
-  /* Activer le premier onglet si aucun actif */
+  document.body.style.overflow = 'hidden';
   var firstTab = drawer.querySelector('.sd-tab');
   if (firstTab && !drawer.querySelector('.sd-tab.active')) firstTab.click();
 }
@@ -1071,53 +1482,30 @@ function closeSettings() {
   document.body.style.overflow = '';
 }
 
-/* ─── Population de l'UI avec les valeurs courantes ───── */
-
 function _populateSettingsUI() {
   var s = _settings;
-
-  /* ── Affichage ── */
-  // themeBtns doit refléter l'état réel du DOM, pas juste _settings.
-  // On lit data-theme directement au cas où toggleTheme() aurait tourné
-  // sans passer par saveSettings() (ex. clic rapide dans le header).
   var currentTheme = document.documentElement.getAttribute('data-theme') || s.theme;
   _setRadio('themeBtns', currentTheme);
   _setRadio('densityBtns', s.density);
   _setRadio('coordFmtBtns', s.coordFmt);
   _setRadio('langBtns', s.lang);
-
-  /* ── Carte ── */
   _setTileOpt(s.tileStyle);
   _setSlider('zoomSlider', 'zoomVal', s.zoomDefault, '');
   _setToggle('showScaleToggle', s.showScale);
   _setToggle('showLegendToggle', s.showLegend);
-
-  /* ── Alertes & Données ── */
   _setSelect('refreshSelect', String(s.refreshInterval));
   _setSelect('alertLevelSelect', s.alertMinLevel);
   _setToggle('soundAlertToggle', s.soundAlerts);
 }
 
-/* ─── Helpers UI ──────────────────────────────────────── */
-
-function _setToggle(id, val) {
-  var el = document.getElementById(id);
-  if (el) el.checked = !!val;
-}
-
-function _setSelect(id, val) {
-  var el = document.getElementById(id);
-  if (el) el.value = val;
-}
+function _setToggle(id, val) { var el = document.getElementById(id); if (el) el.checked = !!val; }
+function _setSelect(id, val) { var el = document.getElementById(id); if (el) el.value = val; }
 
 function _setSlider(sliderId, valId, val, suffix) {
   var slider = document.getElementById(sliderId);
   var label  = document.getElementById(valId);
-  if (slider) {
-    slider.value = val;
-    _updateSliderGradient(slider);
-  }
-  if (label) label.textContent = val + (suffix || '');
+  if (slider) { slider.value = val; _updateSliderGradient(slider); }
+  if (label)  label.textContent = val + (suffix || '');
 }
 
 function _setRadio(groupClass, val) {
@@ -1137,15 +1525,8 @@ function _updateSliderGradient(slider) {
   slider.style.setProperty('--pct', pct + '%');
 }
 
-/* ─── Application des paramètres ─────────────────────── */
-
 function applySettings() {
   var s = _settings;
-
-  /* Thème — appliqué uniquement si différent de l'état courant.
-     Le script anti-flash dans <head> a déjà positionné le bon thème
-     depuis gd-theme. _loadSettings() garantit que s.theme == gd-theme.
-     Cette condition évite tout flash résiduel. */
   var html = document.documentElement;
   var currentTheme = html.getAttribute('data-theme') || 'light';
   if (s.theme && currentTheme !== s.theme) {
@@ -1154,150 +1535,96 @@ function applySettings() {
     setTimeout(function () { html.classList.remove('theme-transitioning'); }, 380);
   }
 
-  /* Densité */
   html.setAttribute('data-density', s.density);
 
-  /* Légende carte */
   var legend = document.querySelector('.map-legend');
   if (legend) legend.style.display = s.showLegend ? '' : 'none';
 
-  /* Échelle Leaflet */
   var scaleEl = document.querySelector('.leaflet-control-scale');
   if (scaleEl) scaleEl.style.display = s.showScale ? '' : 'none';
 
-  /* Fond de carte */
   if (map && _mapReady) _applyTileStyle(s.tileStyle);
 
-  /* Langue (minimal — re-render labels clés) */
   _applyLang(s.lang);
 }
 
+
 /* ══════════════════════════════════════════════════════════
    FONDS DE CARTE
-   ─────────────────────────────────────────────────────────
-   maxNativeZoom : zoom max auquel le fournisseur a de VRAIES
-   tuiles. Au-delà, Leaflet upscale proprement au lieu de
-   griser. Sans ce paramètre, on dépasse la résolution réelle
-   et les tuiles deviennent floues ou absentes.
-
-   detectRetina : sur les écrans haute densité (DPR ≥ 2),
-   Leaflet demande automatiquement les tuiles ×2 quand elles
-   existent — rendu plus net sans rien changer côté code.
 ══════════════════════════════════════════════════════════ */
+
 var TILE_CONFIGS = {
   dark: {
-    url:             'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-    subdomains:      'abcd',
-    label:           'CartoDB Sombre',
-    maxNativeZoom:   18,   /* CartoDB ne dépasse pas z18 en natif */
-    maxZoom:         22,
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+    subdomains: 'abcd', label: 'CartoDB Sombre', maxNativeZoom: 18, maxZoom: 22,
   },
   light: {
-    url:             'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
-    subdomains:      'abcd',
-    label:           'CartoDB Clair',
-    maxNativeZoom:   18,
-    maxZoom:         22,
+    url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+    subdomains: 'abcd', label: 'CartoDB Clair', maxNativeZoom: 18, maxZoom: 22,
   },
   osm: {
-    url:             'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-    subdomains:      '',
-    label:           'OpenStreetMap',
-    maxNativeZoom:   19,
-    maxZoom:         22,
+    url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+    subdomains: 'abcd', label: 'OpenStreetMap', maxNativeZoom: 18, maxZoom: 22,
   },
   topo: {
-    url:             'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
-    subdomains:      'abc',
-    label:           'Topographique',
-    maxNativeZoom:   17,   /* OpenTopoMap s'arrête à z17 */
-    maxZoom:         17,
+    url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+    subdomains: 'abc', label: 'Topographique', maxNativeZoom: 17, maxZoom: 17,
   },
-  /* Esri World Imagery — satellite haute résolution, gratuit, sans clé API.
-     Idéal pour visualiser le terrain réel (végétation, routes, relief). */
   satellite: {
-    url:             'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    subdomains:      '',
-    label:           'Satellite',
-    maxNativeZoom:   18,
-    maxZoom:         22,
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    subdomains: '', label: 'Satellite', maxNativeZoom: 18, maxZoom: 22,
   },
 };
 
-/* Tuile transparente 1×1 utilisée comme fallback sur erreur 404 */
-var _EMPTY_TILE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQ' +
-                  'AABjkB6QAAAABJRU5ErkJggg==';
+var _EMPTY_TILE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAABjkB6QAAAABJRU5ErkJggg==';
 
-/**
- * Construit un L.TileLayer avec retry automatique (max 3 tentatives).
- * Chaque tentative ajoute ?_r=N à l'URL pour contourner le cache navigateur.
- */
 function _buildTileLayer(style) {
   var cfg = TILE_CONFIGS[style] || TILE_CONFIGS.dark;
-
   var opts = {
-    maxNativeZoom:    cfg.maxNativeZoom,
-    maxZoom:          cfg.maxZoom,
-    keepBuffer:       2,           /* était 4 — trop de requêtes simultanées */
-    crossOrigin:      '',
-    updateWhenIdle:   false,
-    updateWhenZooming: false,
-    detectRetina:     true,        /* tuiles ×2 sur écrans haute densité */
-    errorTileUrl:     _EMPTY_TILE, /* tuile transparente au lieu du gris Leaflet */
+    maxNativeZoom: cfg.maxNativeZoom, maxZoom: cfg.maxZoom,
+    keepBuffer: 2, crossOrigin: '',
+    updateWhenIdle: false, updateWhenZooming: false,
+    detectRetina: true, errorTileUrl: _EMPTY_TILE,
   };
   if (cfg.subdomains) opts.subdomains = cfg.subdomains;
 
   var layer = L.tileLayer(cfg.url, opts);
-
-  /* ─── Retry automatique ─────────────────────────────
-     Sur tileerror, on retente jusqu'à 3 fois en changeant
-     légèrement l'URL (param cache-bust). Au-delà, on
-     affiche la tuile transparente (errorTileUrl).
-  ─────────────────────────────────────────────────────*/
   layer.on('tileerror', function (ev) {
     var tile    = ev.tile;
     var retries = parseInt(tile.dataset.gdRetry || '0', 10);
     if (retries < 3) {
       tile.dataset.gdRetry = retries + 1;
       setTimeout(function () {
-        var src = tile.src.split('?')[0];
-        tile.src = src + '?_r=' + tile.dataset.gdRetry;
-      }, 400 * (retries + 1));   /* délai croissant : 400ms, 800ms, 1200ms */
+        tile.src = tile.src.split('?')[0] + '?_r=' + tile.dataset.gdRetry;
+      }, 400 * (retries + 1));
     }
-    /* Si 3 tentatives épuisées → errorTileUrl s'affiche automatiquement */
   });
-
   return layer;
 }
 
 function _applyTileStyle(style) {
   if (!map) return;
-  /* Supprime les couches tuiles existantes */
-  map.eachLayer(function (layer) {
-    if (layer instanceof L.TileLayer) map.removeLayer(layer);
-  });
+  map.eachLayer(function (layer) { if (layer instanceof L.TileLayer) map.removeLayer(layer); });
   _tileLayer = _buildTileLayer(style);
   _tileLayer.addTo(map);
-  /* Remet les couches de données par-dessus */
   if (lRoads)  { map.removeLayer(lRoads);  lRoads.addTo(map); }
   if (lFloods) { map.removeLayer(lFloods); lFloods.addTo(map); }
   if (lVeg)    { map.removeLayer(lVeg);    lVeg.addTo(map); }
-  /* Force le recalcul de taille après changement de couche */
   setTimeout(function () { if (map) map.invalidateSize({ animate: false }); }, 100);
 }
 
 var LANG_LABELS = {
   fr: { dashboard: 'Dashboard', routes: 'Routes', floods: 'Inondations', veg: 'Végétation', alerts: 'Alertes', settings: 'Paramètres' },
-  en: { dashboard: 'Dashboard', routes: 'Roads',  floods: 'Floods',       veg: 'Vegetation', alerts: 'Alerts',  settings: 'Settings'   },
+  en: { dashboard: 'Dashboard', routes: 'Roads',  floods: 'Floods',      veg: 'Vegetation', alerts: 'Alerts',  settings: 'Settings'  },
 };
 
 function _applyLang(lang) {
   var L2 = LANG_LABELS[lang] || LANG_LABELS.fr;
   var map2 = {
-    '[data-set-layer="all"]  .nav-item-label': L2.dashboard,
-    '[data-set-layer="roads"] .nav-item-label': L2.routes,
-    '[data-set-layer="floods"] .nav-item-label': L2.floods,
-    '[data-set-layer="vegetation"] .nav-item-label': L2.veg,
+    '[data-set-layer="all"]  .nav-item-label':        L2.dashboard,
+    '[data-set-layer="roads"] .nav-item-label':       L2.routes,
+    '[data-set-layer="floods"] .nav-item-label':      L2.floods,
+    '[data-set-layer="vegetation"] .nav-item-label':  L2.veg,
   };
   Object.keys(map2).forEach(function (sel) {
     var el = document.querySelector(sel);
@@ -1305,45 +1632,31 @@ function _applyLang(lang) {
   });
 }
 
-/* ─── Sauvegarde + fermeture ──────────────────────────── */
-
 function saveSettings() {
-  /* Lire toutes les valeurs de l'UI dans _settings */
   var s = _settings;
 
-  /* Thème — lire l'état actuel du DOM et synchroniser les deux clés */
   s.theme = document.documentElement.getAttribute('data-theme') || 'light';
   try { localStorage.setItem('gd-theme', s.theme); } catch (e) {}
 
-  /* Densité */
   var da = document.querySelector('.densityBtns .sd-radio-btn.active');
   if (da) s.density = da.dataset.val;
-
-  /* Coord format */
   var ca = document.querySelector('.coordFmtBtns .sd-radio-btn.active');
   if (ca) s.coordFmt = ca.dataset.val;
-
-  /* Langue */
   var la = document.querySelector('.langBtns .sd-radio-btn.active');
   if (la) s.lang = la.dataset.val;
-
-  /* Fond de carte */
   var ta = document.querySelector('.sd-tile-opt.active');
   if (ta) s.tileStyle = ta.dataset.tile;
 
-  /* Zoom */
   var zs = document.getElementById('zoomSlider');
   if (zs) s.zoomDefault = parseInt(zs.value, 10);
 
-  /* Toggles */
   var showScale  = document.getElementById('showScaleToggle');
   var showLegend = document.getElementById('showLegendToggle');
   var soundAlert = document.getElementById('soundAlertToggle');
-  if (showScale)  s.showScale  = showScale.checked;
-  if (showLegend) s.showLegend = showLegend.checked;
+  if (showScale)  s.showScale   = showScale.checked;
+  if (showLegend) s.showLegend  = showLegend.checked;
   if (soundAlert) s.soundAlerts = soundAlert.checked;
 
-  /* Selects */
   var rs = document.getElementById('refreshSelect');
   var al = document.getElementById('alertLevelSelect');
   if (rs) s.refreshInterval = parseInt(rs.value, 10);
@@ -1364,13 +1677,10 @@ function resetSettings() {
   toast('Paramètres réinitialisés', 'nfo');
 }
 
-/* ─── Initialisation du drawer ────────────────────────── */
-
 function initSettings() {
   _loadSettings();
-  applySettings();    /* applique les settings sauvegardés dès le démarrage */
+  applySettings();
 
-  /* Onglets */
   document.querySelectorAll('.sd-tab').forEach(function (tab) {
     tab.addEventListener('click', function () {
       var target = this.dataset.panel;
@@ -1382,46 +1692,33 @@ function initSettings() {
     });
   });
 
-  /* Bouton Paramètres dans la nav */
   document.querySelectorAll('[data-open-settings]').forEach(function (btn) {
     btn.addEventListener('click', openSettings);
     _addRipple(btn);
   });
 
-  /* Fermeture */
   var closeBtn = document.getElementById('settingsClose');
   if (closeBtn) closeBtn.addEventListener('click', closeSettings);
 
   var backdrop = document.getElementById('settingsBackdrop');
   if (backdrop) backdrop.addEventListener('click', closeSettings);
 
-  /* Vider le cache — anciennement onclick inline, maintenant géré ici
-     comme tous les autres boutons du drawer */
   var clearCacheBtn = document.getElementById('clearCacheBtn');
   if (clearCacheBtn) {
     clearCacheBtn.addEventListener('click', function () {
-      // On supprime uniquement nos propres clés — localStorage.clear()
-      // effacerait aussi les données d'autres apps sur le même domaine.
-      ['gd-theme', 'gd-settings'].forEach(function (k) {
-        localStorage.removeItem(k);
-      });
+      ['gd-theme', 'gd-settings'].forEach(function (k) { localStorage.removeItem(k); });
       toast('Cache local vidé', 'nfo');
       closeSettings();
     });
   }
 
-  /* Touche Escape */
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') closeSettings();
-  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeSettings(); });
 
-  /* Boutons Sauvegarder / Réinitialiser */
   var saveBtn  = document.getElementById('settingsSave');
   var resetBtn = document.getElementById('settingsReset');
   if (saveBtn)  saveBtn.addEventListener('click', saveSettings);
   if (resetBtn) resetBtn.addEventListener('click', resetSettings);
 
-  /* Sliders */
   document.querySelectorAll('.sd-slider').forEach(function (sl) {
     _updateSliderGradient(sl);
     sl.addEventListener('input', function () {
@@ -1434,7 +1731,6 @@ function initSettings() {
     });
   });
 
-  /* Boutons radio — activer visuellement + live-preview pour le thème */
   document.querySelectorAll('.sd-radio-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {
       var group = this.closest('[class*="Btns"]') || this.closest('.sd-radio-group');
@@ -1442,9 +1738,6 @@ function initSettings() {
         group.querySelectorAll('.sd-radio-btn').forEach(function (b) { b.classList.remove('active'); });
         this.classList.add('active');
       }
-
-      // Live-preview du thème : on l'applique immédiatement sans attendre
-      // que l'utilisateur clique sur "Enregistrer". Plus intuitif.
       if (group && group.classList.contains('themeBtns')) {
         var picked = this.dataset.val;
         var html   = document.documentElement;
@@ -1452,20 +1745,18 @@ function initSettings() {
           html.classList.add('theme-transitioning');
           html.setAttribute('data-theme', picked);
           setTimeout(function () { html.classList.remove('theme-transitioning'); }, 380);
-          // Pas de localStorage ici — ça sera persisté au clic "Enregistrer"
-          // ou à la prochaine bascule via toggleTheme()
         }
       }
     });
   });
 
-  /* Choix fond de carte */
   document.querySelectorAll('.sd-tile-opt').forEach(function (opt) {
     opt.addEventListener('click', function () {
       document.querySelectorAll('.sd-tile-opt').forEach(function (o) { o.classList.remove('active'); });
       this.classList.add('active');
-      // Live-preview immédiat du fond de carte — pas besoin d'attendre "Enregistrer"
       if (map && _mapReady) _applyTileStyle(this.dataset.tile);
     });
   });
+
+  _updateExportLinks();
 }
