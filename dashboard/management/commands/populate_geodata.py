@@ -2,29 +2,21 @@
 populate_geodata.py — GéoDash
 Importe les données géospatiales depuis OpenStreetMap via l'API Overpass.
 
-Optimisation principale : une seule requête Overpass par zone qui récupère
-routes + eau + végétation en même temps.
-
-Améliorations v2 :
-  - Clé unique par osm_id (plus de collisions sur les noms)
-  - Suppression automatique des éléments disparus d'OSM
-  - Gestion d'erreur par élément (un échec ne plante pas tout)
-  - Factorisation DRY des 3 fonctions save_*
-  - Fermeture automatique des polygones
-  - Backoff adaptatif + rotation d'instances Overpass
-
-PRÉREQUIS : ajouter osm_id aux modèles avant d'utiliser ce fichier.
-  Voir models_patch.py (livré avec ce fichier) et lancer :
-    python manage.py makemigrations
-    python manage.py migrate
-    python manage.py populate_geodata --clear   # réimport complet
+CORRECTIF v4 :
+  - Délai inter-zones augmenté (30s par défaut, configurable via --delay)
+  - Gestion correcte des 403 : pause longue + rotation d'instance
+  - Option --batch-size : pause longue tous les N zones
+  - Option --delay : délai personnalisable entre zones
+  - Compteur de 403 consécutifs avec escalade du délai
 
 Usage :
-    python manage.py populate_geodata                  # toutes les zones CI
-    python manage.py populate_geodata --zone MAN       # une seule ville
-    python manage.py populate_geodata --dry-run        # voir sans écrire
-    python manage.py populate_geodata --clear          # repart de zéro
-    python manage.py populate_geodata --roads-only     # routes uniquement
+    python manage.py populate_geodata                          # toutes les zones CI
+    python manage.py populate_geodata --zone MAN               # une seule ville
+    python manage.py populate_geodata --dry-run                # voir sans écrire
+    python manage.py populate_geodata --clear                  # repart de zéro
+    python manage.py populate_geodata --roads-only             # routes uniquement
+    python manage.py populate_geodata --delay 45               # 45s entre zones
+    python manage.py populate_geodata --batch-size 10          # pause 5min tous les 10 zones
 """
 
 import logging
@@ -51,13 +43,25 @@ OVERPASS_INSTANCES = [
 ]
 _overpass_instance_index = 0
 
-OVERPASS_TIMEOUT = 90
-REQUEST_DELAY    = 12.0
-MAX_RETRIES      = 3
-RETRY_DELAY      = 15.0
-SEARCH_RADIUS    = 0.05
-MAX_ELEMENTS     = 500
+OVERPASS_TIMEOUT  = 90
+REQUEST_DELAY     = 30.0   # ← augmenté : 12s → 30s entre zones
+MAX_RETRIES       = 3
+RETRY_DELAY       = 15.0
+SEARCH_RADIUS     = 0.05
 
+# Délai entre les 3 requêtes d'une même zone (routes / eau / veg)
+INTER_QUERY_DELAY = 5.0    # ← augmenté : 3s → 5s
+
+# Pause longue après un ban (403 ou trop de 429)
+BAN_WAIT          = 300    # 5 minutes
+BATCH_PAUSE       = 300    # 5 minutes tous les N zones (configurable)
+
+# ── Limites SÉPARÉES par type de données ──
+MAX_ROADS        = 500
+MAX_WATER        = 300
+MAX_VEGETATION   = 300
+
+_consecutive_403 = 0   # ← NOUVEAU : compteur de 403 consécutifs
 _consecutive_429 = 0
 _MAX_GLOBAL_WAIT = 300
 
@@ -409,38 +413,29 @@ def ndvi_to_density(ndvi: float) -> str:
 
 
 def _close_polygon(coords: list) -> list:
-    """Ferme un anneau de polygone si le premier et le dernier point diffèrent."""
     if coords and coords[0] != coords[-1]:
         return coords + [coords[0]]
     return coords
 
 
 def _polygon_area_km2(geometry: list) -> float:
-    """
-    Approximation de l'aire réelle d'un polygone OSM via la formule de Shoelace
-    projetée en coordonnées métriques (approximation plate valide sur de petites surfaces).
-    Beaucoup plus précis que haversine(bbox) * 0.5 pour les formes irrégulières.
-    """
     if len(geometry) < 3:
         return 0.0
-    # Centroïde pour la projection locale
     lat0 = sum(p["lat"] for p in geometry) / len(geometry)
     cos_lat = math.cos(math.radians(lat0))
-    # Conversion degrés → mètres (approximation locale)
     R = 6_371_000.0
     pts = [
         (math.radians(p["lon"]) * R * cos_lat,
          math.radians(p["lat"]) * R)
         for p in geometry
     ]
-    # Formule de Shoelace
     n = len(pts)
     area = 0.0
     for i in range(n):
         j = (i + 1) % n
         area += pts[i][0] * pts[j][1]
         area -= pts[j][0] * pts[i][1]
-    return round(abs(area) / 2.0 / 1_000_000, 4)  # m² → km²
+    return round(abs(area) / 2.0 / 1_000_000, 4)
 
 
 # ─── Overpass : rotation d'instances et backoff adaptatif ─────────────────────
@@ -451,29 +446,12 @@ def _next_overpass_instance() -> str:
     return OVERPASS_INSTANCES[_overpass_instance_index]
 
 
-def overpass_fetch(zone_bbox: str, roads_only: bool, stdout) -> dict | None:
-    global _consecutive_429
-
-    if roads_only:
-        query = f"""
-        [out:json][timeout:{OVERPASS_TIMEOUT}][maxsize:100000000];
-        (
-          way["highway"~"^({HIGHWAY_TAGS})$"]({zone_bbox});
-        );
-        out body geom {MAX_ELEMENTS};
-        """
-    else:
-        query = f"""
-        [out:json][timeout:{OVERPASS_TIMEOUT}][maxsize:100000000];
-        (
-          way["highway"~"^({HIGHWAY_TAGS})$"]({zone_bbox});
-          way["natural"~"^({WATER_NATURAL_TAGS})$"]({zone_bbox});
-          way["waterway"~"^({WATER_WAY_TAGS})$"]({zone_bbox});
-          way["landuse"~"^({LANDUSE_TAGS})$"]({zone_bbox});
-          way["natural"~"^({NATURAL_VEG_TAGS})$"]({zone_bbox});
-        );
-        out body geom {MAX_ELEMENTS};
-        """
+def _overpass_raw_fetch(query: str, stdout) -> dict | None:
+    """
+    Envoie une requête Overpass brute avec retry + rotation d'instances.
+    Retourne le JSON ou None en cas d'échec.
+    """
+    global _consecutive_429, _consecutive_403
 
     for attempt in range(1, MAX_RETRIES + 1):
         url = OVERPASS_INSTANCES[_overpass_instance_index]
@@ -491,6 +469,7 @@ def overpass_fetch(zone_bbox: str, roads_only: bool, stdout) -> dict | None:
                 raise ValueError(f"Overpass remark: {data['remark']}")
 
             _consecutive_429 = 0
+            _consecutive_403 = 0  # ← reset au succès
             return data
 
         except requests.exceptions.Timeout:
@@ -501,7 +480,24 @@ def overpass_fetch(zone_bbox: str, roads_only: bool, stdout) -> dict | None:
 
         except requests.exceptions.HTTPError as e:
             code = e.response.status_code
-            if code == 429:
+
+            # ── 403 : IP bannie — pause longue obligatoire ──────────────────
+            if code == 403:
+                _consecutive_403 += 1
+                # Escalade : 5min, 10min, 15min selon le nombre de 403 consécutifs
+                wait = min(BAN_WAIT * _consecutive_403, 900)
+                new_url = _next_overpass_instance()
+                msg = (
+                    f"HTTP 403 Ban IP détecté (tentative {attempt}/{MAX_RETRIES}) "
+                    f"— pause {wait}s, bascule vers {new_url}"
+                )
+                logger.warning(msg)
+                stdout.write(f"  {msg}")
+                time.sleep(wait)
+                continue
+
+            # ── 429 : rate limit — backoff exponentiel ──────────────────────
+            elif code == 429:
                 _consecutive_429 += 1
                 retry_after = e.response.headers.get("Retry-After")
                 if retry_after:
@@ -518,10 +514,17 @@ def overpass_fetch(zone_bbox: str, roads_only: bool, stdout) -> dict | None:
                 stdout.write(f"  Bascule vers {new_url}")
                 time.sleep(wait)
                 continue
+
             else:
                 msg = f"Erreur HTTP {code} (tentative {attempt}/{MAX_RETRIES})"
                 logger.warning(msg)
                 stdout.write(f"  {msg}")
+
+        except requests.exceptions.ConnectionError as e:
+            msg = f"Erreur DNS/connexion : {e} (tentative {attempt}/{MAX_RETRIES})"
+            logger.warning(msg)
+            stdout.write(f"  {msg}")
+            _next_overpass_instance()
 
         except requests.exceptions.RequestException as e:
             msg = f"Erreur réseau : {e} (tentative {attempt}/{MAX_RETRIES})"
@@ -543,21 +546,84 @@ def overpass_fetch(zone_bbox: str, roads_only: bool, stdout) -> dict | None:
     return None
 
 
-def _inter_zone_delay(stdout) -> None:
-    """Pause adaptative — s'allonge si le serveur throttle en série."""
-    if _consecutive_429 == 0:
-        wait = REQUEST_DELAY
+def overpass_fetch_roads(zone_bbox: str, stdout) -> dict | None:
+    """Requête dédiée aux routes."""
+    query = f"""
+    [out:json][timeout:{OVERPASS_TIMEOUT}][maxsize:100000000];
+    (
+      way["highway"~"^({HIGHWAY_TAGS})$"]({zone_bbox});
+    );
+    out body geom {MAX_ROADS};
+    """
+    return _overpass_raw_fetch(query, stdout)
+
+
+def overpass_fetch_water(zone_bbox: str, stdout) -> dict | None:
+    """Requête dédiée aux zones hydrographiques."""
+    query = f"""
+    [out:json][timeout:{OVERPASS_TIMEOUT}][maxsize:100000000];
+    (
+      way["natural"~"^({WATER_NATURAL_TAGS})$"]({zone_bbox});
+      way["waterway"~"^({WATER_WAY_TAGS})$"]({zone_bbox});
+    );
+    out body geom {MAX_WATER};
+    """
+    return _overpass_raw_fetch(query, stdout)
+
+
+def overpass_fetch_vegetation(zone_bbox: str, stdout) -> dict | None:
+    """Requête dédiée à la végétation."""
+    query = f"""
+    [out:json][timeout:{OVERPASS_TIMEOUT}][maxsize:100000000];
+    (
+      way["landuse"~"^({LANDUSE_TAGS})$"]({zone_bbox});
+      way["natural"~"^({NATURAL_VEG_TAGS})$"]({zone_bbox});
+    );
+    out body geom {MAX_VEGETATION};
+    """
+    return _overpass_raw_fetch(query, stdout)
+
+
+def _inter_zone_delay(stdout, custom_delay: float = None) -> None:
+    """
+    Pause entre deux zones.
+    Escalade automatique si des 403/429 ont été détectés récemment.
+    """
+    base = custom_delay if custom_delay is not None else REQUEST_DELAY
+
+    if _consecutive_403 > 0:
+        # Après un ban : pause minimale de 2 minutes, même entre zones
+        wait = max(base, 120.0)
+        stdout.write(f"  [anti-ban] Pause de {wait:.0f}s entre zones (IP bannie récemment)...")
+    elif _consecutive_429 == 0:
+        wait = base
     elif _consecutive_429 <= 3:
-        wait = REQUEST_DELAY * 5
+        wait = base * 5
     elif _consecutive_429 <= 6:
-        wait = REQUEST_DELAY * 10
+        wait = base * 10
     else:
         wait = _MAX_GLOBAL_WAIT
         stdout.write(
-            f"  {_consecutive_429} zones en 429 consecutif — "
-            f"pause de {wait}s pour laisser le serveur recuperer."
+            f"  {_consecutive_429} zones en 429 consécutif — "
+            f"pause de {wait:.0f}s pour laisser le serveur récupérer."
         )
+
     time.sleep(wait)
+
+
+def _inter_query_delay():
+    """Pause entre les requêtes du même lot (routes → eau → veg)."""
+    time.sleep(INTER_QUERY_DELAY)
+
+
+def _batch_pause(stdout, batch_size: int, zone_index: int) -> None:
+    """Pause longue tous les N zones pour éviter les bans sur les gros imports."""
+    if batch_size > 0 and zone_index > 0 and zone_index % batch_size == 0:
+        stdout.write(
+            f"\n  ── Pause batch ({zone_index} zones traitées) : "
+            f"{BATCH_PAUSE}s pour laisser Overpass récupérer... ──"
+        )
+        time.sleep(BATCH_PAUSE)
 
 
 # ─── Classificateur d'éléments OSM ───────────────────────────────────────────
@@ -593,27 +659,16 @@ def create_zones_if_missing(stdout) -> int:
     return len(to_create)
 
 
-# ─── Sauvegarde en base — fonction générique DRY ─────────────────────────────
-#
-# Les 3 fonctions save_* sont factorisées ici.
-# Clé d'identification : osm_id (BigIntegerField dans les modèles).
-# Avantages vs l'ancienne clé par nom :
-#   - Pas de collision sur les noms identiques ("Route Nationale" × 50)
-#   - Suppression automatique des éléments disparus d'OSM
-#   - Gestion d'erreur par élément sans planter tout le lot
-#
-# PRÉREQUIS : osm_id doit exister dans le modèle.
-# Voir models_patch.py pour le diff à appliquer.
+# ─── Sauvegarde en base ───────────────────────────────────────────────────────
 
 def _build_road_defaults(el: dict, now) -> dict | None:
-    """Construit le dict de champs pour un RoadSegment depuis un élément OSM."""
     tags    = el.get("tags", {})
     highway = tags.get("highway", "unclassified")
     name    = (tags.get("name") or tags.get("ref")
                or f"{HIGHWAY_LABEL.get(highway, highway)} #{el['id']}")
     geometry = el.get("geometry", [])
     if len(geometry) < 2:
-        return None  # trop peu de points, segment invalide
+        return None
 
     geojson = {
         "type": "LineString",
@@ -640,7 +695,6 @@ def _build_road_defaults(el: dict, now) -> dict | None:
 
 
 def _build_flood_defaults(el: dict, now) -> dict | None:
-    """Construit le dict de champs pour un FloodRisk depuis un élément OSM."""
     tags     = el.get("tags", {})
     waterway = tags.get("waterway", "")
     natural  = tags.get("natural", "")
@@ -658,7 +712,7 @@ def _build_flood_defaults(el: dict, now) -> dict | None:
     geometry = el.get("geometry", [])
     if geometry:
         coords   = [[p["lon"], p["lat"]] for p in geometry]
-        closed   = _close_polygon(coords)  # fermeture explicite du polygone
+        closed   = _close_polygon(coords)
         area_km2 = _polygon_area_km2(geometry)
         geojson  = {"type": "Polygon", "coordinates": [closed]}
     else:
@@ -677,7 +731,6 @@ def _build_flood_defaults(el: dict, now) -> dict | None:
 
 
 def _build_vegetation_defaults(el: dict, now) -> dict | None:
-    """Construit le dict de champs pour un VegetationDensity depuis un élément OSM."""
     tags    = el.get("tags", {})
     landuse = tags.get("landuse", "")
     natural = tags.get("natural", "")
@@ -707,7 +760,6 @@ def _build_vegetation_defaults(el: dict, now) -> dict | None:
     }
 
 
-# Correspondance modèle → builder + champs à mettre à jour
 _MODEL_CONFIG = {
     RoadSegment: {
         "builder":       _build_road_defaults,
@@ -727,72 +779,46 @@ _MODEL_CONFIG = {
 }
 
 
-def _save_elements(
-    zone: Zone,
-    elements: list,
-    ModelClass,
-    stdout,
-) -> tuple[int, int, int]:
-    """
-    Upsert + delete générique pour RoadSegment, FloodRisk, VegetationDensity.
-
-    Retourne (créés, mis_à_jour, supprimés).
-
-    Identification par osm_id — pas de collision sur les noms.
-    Les éléments disparus d'OSM sont supprimés de la base.
-    Les erreurs par élément sont loggées sans planter le lot.
-    """
-    cfg    = _MODEL_CONFIG[ModelClass]
-    builder = cfg["builder"]
+def _save_elements(zone, elements, ModelClass, stdout):
+    cfg           = _MODEL_CONFIG[ModelClass]
+    builder       = cfg["builder"]
     update_fields = cfg["update_fields"]
-    now = timezone.now()
+    now           = timezone.now()
 
-    # Charger les objets existants indexés par osm_id
-    existing: dict[int, ModelClass] = {
+    existing = {
         obj.osm_id: obj
         for obj in ModelClass.objects.filter(zone=zone).only("id", "osm_id", *update_fields)
         if obj.osm_id is not None
     }
 
-    to_create:     list = []
-    to_update:     list = []
-    processed_ids: set  = set()
-    skipped        = 0
+    to_create     = []
+    to_update     = []
+    processed_ids = set()
+    skipped       = 0
 
     for el in elements:
         osm_id = el.get("id")
         if osm_id is None:
             skipped += 1
             continue
-
         try:
             defaults = builder(el, now)
             if defaults is None:
-                # Géométrie invalide (ex: segment < 2 points)
                 skipped += 1
                 continue
-
             processed_ids.add(osm_id)
-
             if osm_id in existing:
                 obj = existing[osm_id]
                 for field, value in defaults.items():
                     setattr(obj, field, value)
                 to_update.append(obj)
             else:
-                to_create.append(
-                    ModelClass(zone=zone, osm_id=osm_id, **defaults)
-                )
-
+                to_create.append(ModelClass(zone=zone, osm_id=osm_id, **defaults))
         except Exception as e:
-            logger.error(
-                "Erreur traitement OSM id=%s (%s / zone=%s) : %s",
-                osm_id, ModelClass.__name__, zone.code, e
-            )
+            logger.error("Erreur traitement OSM id=%s (%s / zone=%s) : %s",
+                         osm_id, ModelClass.__name__, zone.code, e)
             skipped += 1
-            continue
 
-    # Éléments disparus d'OSM depuis le dernier import
     obsolete_ids = set(existing.keys()) - processed_ids
 
     with transaction.atomic():
@@ -804,47 +830,36 @@ def _save_elements(
             deleted_count, _ = ModelClass.objects.filter(
                 zone=zone, osm_id__in=obsolete_ids
             ).delete()
-            logger.info(
-                "%d %s supprimés (obsolètes OSM) — zone %s",
-                deleted_count, ModelClass.__name__, zone.code
-            )
+            logger.info("%d %s supprimés (obsolètes OSM) — zone %s",
+                        deleted_count, ModelClass.__name__, zone.code)
 
     if skipped:
-        logger.debug("%d éléments ignorés (géométrie invalide) — zone %s", skipped, zone.code)
+        logger.debug("%d éléments ignorés — zone %s", skipped, zone.code)
 
     return len(to_create), len(to_update), len(obsolete_ids)
 
 
-# ─── Fonctions publiques (conservent la même interface qu'avant) ──────────────
-
-def save_roads(zone: Zone, elements: list, stdout) -> tuple[int, int]:
+def save_roads(zone, elements, stdout):
     c, u, d = _save_elements(zone, elements, RoadSegment, stdout)
-    if d:
-        stdout.write(f"  Routes : {d} obsolètes supprimées")
+    if d: stdout.write(f"  Routes : {d} obsolètes supprimées")
     return c, u
 
 
-def save_flood_risks(zone: Zone, elements: list, stdout) -> tuple[int, int]:
+def save_flood_risks(zone, elements, stdout):
     c, u, d = _save_elements(zone, elements, FloodRisk, stdout)
-    if d:
-        stdout.write(f"  Inondations : {d} obsolètes supprimées")
+    if d: stdout.write(f"  Inondations : {d} obsolètes supprimées")
     return c, u
 
 
-def save_vegetation(zone: Zone, elements: list, stdout) -> tuple[int, int]:
+def save_vegetation(zone, elements, stdout):
     c, u, d = _save_elements(zone, elements, VegetationDensity, stdout)
-    if d:
-        stdout.write(f"  Végétation : {d} obsolètes supprimées")
+    if d: stdout.write(f"  Végétation : {d} obsolètes supprimées")
     return c, u
 
 
 # ─── Génération d'alertes ─────────────────────────────────────────────────────
 
-def generate_alerts(zone: Zone) -> int:
-    """
-    Génère des alertes pour les routes dégradées et les zones inondables critiques.
-    get_or_create évite les doublons à chaque réimport.
-    """
+def generate_alerts(zone) -> int:
     count = 0
     now   = timezone.now()
 
@@ -917,14 +932,30 @@ class Command(BaseCommand):
             "--roads-only", action="store_true",
             help="Routes uniquement, ignore eau et végétation.",
         )
+        # ── NOUVEAUX ARGUMENTS ──────────────────────────────────────────────
+        parser.add_argument(
+            "--delay", type=float, default=REQUEST_DELAY,
+            help=f"Délai en secondes entre chaque zone (défaut: {REQUEST_DELAY}s).",
+        )
+        parser.add_argument(
+            "--batch-size", type=int, default=20,
+            help="Pause longue de 5min tous les N zones (défaut: 20, 0 = désactivé).",
+        )
 
     def handle(self, *args, **options):
         dry_run    = options["dry_run"]
         zone_code  = options["zone"]
         roads_only = options["roads_only"]
+        delay      = options["delay"]
+        batch_size = options["batch_size"]
 
         if dry_run:
             self.stdout.write(self.style.WARNING("DRY-RUN -- aucune ecriture en base\n"))
+
+        self.stdout.write(
+            f"Configuration : délai={delay}s, batch={batch_size} zones, "
+            f"pause_batch={BATCH_PAUSE}s\n"
+        )
 
         if not dry_run:
             self.stdout.write(self.style.HTTP_INFO("Verification des zones de Cote d'Ivoire..."))
@@ -949,7 +980,8 @@ class Command(BaseCommand):
                 "Aucune zone en base. Lance sans --zone pour créer les zones CI."
             )
 
-        self.stdout.write(f"Zones a traiter : {zones.count()}\n")
+        total_zones = zones.count()
+        self.stdout.write(f"Zones a traiter : {total_zones}\n")
         self.stdout.write(f"Instances Overpass : {', '.join(OVERPASS_INSTANCES)}\n")
 
         if options["clear"] and not dry_run:
@@ -972,37 +1004,70 @@ class Command(BaseCommand):
 
         totals = dict(rc=0, ru=0, fc=0, fu=0, vc=0, vu=0, alerts=0, errors=0)
 
-        for zone in zones:
-            self.stdout.write(self.style.HTTP_INFO(f"\n{'-' * 52}"))
-            self.stdout.write(self.style.HTTP_INFO(f"  {zone.name} ({zone.code})"))
+        for zone_index, zone in enumerate(zones, start=1):
+
+            # ── Pause batch tous les N zones ──────────────────────────────
+            _batch_pause(self.stdout, batch_size, zone_index - 1)
+
+            self.stdout.write(self.style.HTTP_INFO(
+                f"\n{'-' * 52}\n  [{zone_index}/{total_zones}] {zone.name} ({zone.code})"
+            ))
 
             zone_bbox = make_bbox(zone.lat_center, zone.lng_center)
-            self.stdout.write("  Requete Overpass (routes + eau + vegetation)...")
-            data = overpass_fetch(zone_bbox, roads_only, self.stdout)
 
-            if data is None:
+            # ── REQUÊTE 1 : Routes ────────────────────────────────────────
+            self.stdout.write("  [1/3] Requete routes...")
+            roads_data = overpass_fetch_roads(zone_bbox, self.stdout)
+
+            if roads_data is None:
                 totals["errors"] += 1
-                logger.error("Import echoue -- zone %s (%s)", zone.name, zone.code)
                 self.stdout.write(self.style.ERROR(
                     f"  Overpass inaccessible pour {zone.name} -- zone ignoree."
                 ))
-                _inter_zone_delay(self.stdout)
+                _inter_zone_delay(self.stdout, delay)
                 continue
 
-            elements = [el for el in data.get("elements", []) if el.get("type") == "way"]
-            roads_el = [el for el in elements if classify_element(el) == "road"]
-            flood_el = [el for el in elements if classify_element(el) == "flood"]
-            veg_el   = [el for el in elements if classify_element(el) == "vegetation"]
+            roads_el = [
+                el for el in roads_data.get("elements", [])
+                if el.get("type") == "way" and classify_element(el) == "road"
+            ]
+            self.stdout.write(f"  → {len(roads_el)} routes trouvees")
 
-            self.stdout.write(
-                f"  {len(roads_el)} routes, {len(flood_el)} zones eau, "
-                f"{len(veg_el)} zones vegetation"
-            )
+            # ── REQUÊTE 2 : Eau ───────────────────────────────────────────
+            flood_el = []
+            if not roads_only:
+                _inter_query_delay()
+                self.stdout.write("  [2/3] Requete zones eau...")
+                water_data = overpass_fetch_water(zone_bbox, self.stdout)
+                if water_data:
+                    flood_el = [
+                        el for el in water_data.get("elements", [])
+                        if el.get("type") == "way" and classify_element(el) == "flood"
+                    ]
+                else:
+                    self.stdout.write(self.style.WARNING("  Eau : echec requete, on continue"))
+                self.stdout.write(f"  → {len(flood_el)} zones eau trouvees")
+
+            # ── REQUÊTE 3 : Végétation ────────────────────────────────────
+            veg_el = []
+            if not roads_only:
+                _inter_query_delay()
+                self.stdout.write("  [3/3] Requete vegetation...")
+                veg_data = overpass_fetch_vegetation(zone_bbox, self.stdout)
+                if veg_data:
+                    veg_el = [
+                        el for el in veg_data.get("elements", [])
+                        if el.get("type") == "way" and classify_element(el) == "vegetation"
+                    ]
+                else:
+                    self.stdout.write(self.style.WARNING("  Vegetation : echec requete, on continue"))
+                self.stdout.write(f"  → {len(veg_el)} zones vegetation trouvees")
 
             if dry_run:
-                _inter_zone_delay(self.stdout)
+                _inter_zone_delay(self.stdout, delay)
                 continue
 
+            # ── Sauvegarde ────────────────────────────────────────────────
             try:
                 c, u = save_roads(zone, roads_el, self.stdout)
                 totals["rc"] += c
@@ -1043,7 +1108,7 @@ class Command(BaseCommand):
                     logger.exception("Erreur generate_alerts -- zone %s", zone.code)
                     self.stdout.write(self.style.ERROR(f"  Alertes KO : {e}"))
 
-            _inter_zone_delay(self.stdout)
+            _inter_zone_delay(self.stdout, delay)
 
         self.stdout.write(self.style.SUCCESS(f"\n{'=' * 52}"))
         self.stdout.write(self.style.SUCCESS("Import termine"))

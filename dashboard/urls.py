@@ -1,5 +1,6 @@
 from django.urls import path
 from . import views
+from .traffic_views import api_traffic_zone, api_traffic_all
 
 app_name = "dashboard"
 
@@ -21,8 +22,12 @@ urlpatterns = [
     # API — Stats par zone
     path("api/zones/<str:zone_code>/stats/",    views.api_zone_stats,     name="api_zone_stats"),
 
-    # API — Google Earth Engine (asynchrone, appelé par dashboard.js)
+    # API — Google Earth Engine
     path("api/gee/ndvi/",                       views.api_gee_ndvi,       name="api_gee_ndvi"),
     path("api/gee/flood/",                      views.api_gee_flood,      name="api_gee_flood"),
     path("api/gee/road/",                       views.api_gee_road,       name="api_gee_road"),
+
+    # API — Estimation du trafic
+    path("api/traffic/",                        api_traffic_all,          name="api_traffic_all"),
+    path("api/traffic/<str:zone_code>/",        api_traffic_zone,         name="api_traffic_zone"),
 ]
