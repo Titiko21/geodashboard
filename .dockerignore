@@ -5,7 +5,7 @@ __pycache__/
 *.pyd
 *.sqlite3
 *.log
-
+ *.node_modules/
 # Environnements virtuels
 .venv/
 venv/

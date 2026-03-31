@@ -20,59 +20,59 @@
 'use strict';
 
 /* ─── État global ─────────────────────────────────────── */
-let map        = null;
-let lRoads     = null;
-let lFloods    = null;
-let lVeg       = null;
-let lGeeNdvi   = null;
-let lGeeFlood  = null;
+let map = null;
+let lRoads = null;
+let lFloods = null;
+let lVeg = null;
+let lGeeNdvi = null;
+let lGeeFlood = null;
 let _allBounds = [];
-let _initLat   = 5.35;
-let _initLng   = -4.00;
-let _mapReady  = false;
+let _initLat = 5.35;
+let _initLng = -4.00;
+let _mapReady = false;
 
 /* Zone courante — lue depuis l'URL au démarrage, utilisée partout */
 var _activeZoneCode = (new URLSearchParams(window.location.search)).get('zone') || '';
 
 const layerVis = { roads: true, floods: true, vegetation: true };
 const layerRef = {
-  roads:      function () { return lRoads; },
-  floods:     function () { return lFloods; },
+  roads: function () { return lRoads; },
+  floods: function () { return lFloods; },
   vegetation: function () { return lVeg; },
 };
 
 /* ─── Couleurs centralisées ─────────────────────────────────────────────────── */
 const GD_COLORS = {
-  road:           '#5b8dee',
-  flood:          '#26c6da',
-  vegetation:     '#3ecf6e',
-  alert:          '#ff7043',
-  flood_faible:   '#22d3ee',
-  flood_modere:   '#3b82f6',
-  flood_eleve:    '#f97316',
+  road: '#5b8dee',
+  flood: '#26c6da',
+  vegetation: '#3ecf6e',
+  alert: '#ff7043',
+  flood_faible: '#22d3ee',
+  flood_modere: '#3b82f6',
+  flood_eleve: '#f97316',
   flood_critique: '#dc2626',
-  veg_sparse:     '#bef264',
-  veg_moderate:   '#4ade80',
-  veg_dense:      '#16a34a',
+  veg_sparse: '#bef264',
+  veg_moderate: '#4ade80',
+  veg_dense: '#16a34a',
   veg_very_dense: '#14532d',
 };
 
 /* ─── Paramètres + couche tuiles ────────────────────────────────────────────── */
 const GD_SETTINGS_DEFAULT = {
-  theme:           'light',
-  density:         'normal',
-  tileStyle:       'dark',
-  zoomDefault:     9,
-  showScale:       true,
-  showLegend:      true,
-  coordFmt:        'DD',
+  theme: 'light',
+  density: 'normal',
+  tileStyle: 'dark',
+  zoomDefault: 9,
+  showScale: true,
+  showLegend: true,
+  coordFmt: 'DD',
   refreshInterval: 60,
-  alertMinLevel:   'info',
-  soundAlerts:     false,
-  lang:            'fr',
+  alertMinLevel: 'info',
+  soundAlerts: false,
+  lang: 'fr',
 };
 
-let _settings  = Object.assign({}, GD_SETTINGS_DEFAULT);
+let _settings = Object.assign({}, GD_SETTINGS_DEFAULT);
 let _tileLayer = null;
 
 
@@ -81,9 +81,9 @@ let _tileLayer = null;
 ══════════════════════════════════════════════════════════ */
 
 function toggleTheme() {
-  var html    = document.documentElement;
+  var html = document.documentElement;
   var current = html.getAttribute('data-theme') || 'light';
-  var next    = current === 'light' ? 'dark' : 'light';
+  var next = current === 'light' ? 'dark' : 'light';
 
   html.classList.add('theme-transitioning');
   html.setAttribute('data-theme', next);
@@ -94,7 +94,7 @@ function toggleTheme() {
       _settings.theme = next;
       _saveSettings();
     }
-  } catch (e) {}
+  } catch (e) { }
 
   setTimeout(function () { html.classList.remove('theme-transitioning'); }, 380);
 }
@@ -111,10 +111,10 @@ function _addRipple(el) {
     var span = document.createElement('span');
     span.className = 'ripple-wave';
     span.style.cssText =
-      'width:'  + size + 'px;' +
+      'width:' + size + 'px;' +
       'height:' + size + 'px;' +
-      'left:'   + (e.clientX - rect.left  - size / 2) + 'px;' +
-      'top:'    + (e.clientY - rect.top   - size / 2) + 'px;';
+      'left:' + (e.clientX - rect.left - size / 2) + 'px;' +
+      'top:' + (e.clientY - rect.top - size / 2) + 'px;';
     this.appendChild(span);
     setTimeout(function () { if (span.parentNode) span.parentNode.removeChild(span); }, 600);
   });
@@ -140,7 +140,7 @@ function initEventListeners() {
     label.addEventListener('click', function (e) {
       e.preventDefault();
       var type = this.dataset.toggleLayer;
-      var cb   = this.querySelector('input[type="checkbox"]');
+      var cb = this.querySelector('input[type="checkbox"]');
       if (cb) cb.checked = !cb.checked;
       toggleLayer(type, this);
     });
@@ -156,11 +156,11 @@ function initEventListeners() {
       });
       item.classList.add('focused');
       focusAlert(
-        parseFloat(item.dataset.lat  || 0),
-        parseFloat(item.dataset.lng  || 0),
+        parseFloat(item.dataset.lat || 0),
+        parseFloat(item.dataset.lng || 0),
         item.dataset.category || '',
-        item.dataset.zoneLat  || 0,
-        item.dataset.zoneLng  || 0
+        item.dataset.zoneLat || 0,
+        item.dataset.zoneLng || 0
       );
     });
   }
@@ -208,12 +208,12 @@ function initMap(lat, lng, data) {
   _initLng = parseFloat(lng) || -4.00;
 
   map = L.map('map', {
-    zoomControl:         false,
-    attributionControl:  false,
-    zoomAnimation:       true,
-    fadeAnimation:       true,
-    zoomSnap:            0.5,
-    zoomDelta:           0.5,
+    zoomControl: false,
+    attributionControl: false,
+    zoomAnimation: true,
+    fadeAnimation: true,
+    zoomSnap: 0.5,
+    zoomDelta: 0.5,
     wheelPxPerZoomLevel: 80,
   });
 
@@ -224,9 +224,9 @@ function initMap(lat, lng, data) {
   L.control.scale({ position: 'bottomleft', imperial: false, metric: true }).addTo(map);
   _addResetControl();
 
-  lRoads  = L.layerGroup().addTo(map);
+  lRoads = L.layerGroup().addTo(map);
   lFloods = L.layerGroup().addTo(map);
-  lVeg    = L.layerGroup().addTo(map);
+  lVeg = L.layerGroup().addTo(map);
 
   map.setView([_initLat, _initLng], 9);
   _mapReady = true;
@@ -273,7 +273,7 @@ function _hideOverlay() {
   var o = document.getElementById('mapOverlay');
   if (!o) return;
   o.style.transition = 'opacity .5s';
-  o.style.opacity    = '0';
+  o.style.opacity = '0';
   setTimeout(function () { o.style.display = 'none'; }, 500);
 }
 
@@ -307,7 +307,7 @@ function _renderData(data) {
       lRoads.addLayer(shadow);
 
       var opts = { color: r.color, weight: 5, opacity: .9, lineCap: 'round', lineJoin: 'round' };
-      var lyr  = L.polyline(coords, opts);
+      var lyr = L.polyline(coords, opts);
 
       lyr.on('mouseover', function (e) {
         this.setStyle({ weight: 8, opacity: 1 });
@@ -319,7 +319,7 @@ function _renderData(data) {
         shadow.setStyle({ weight: 8 });
         L.DomUtil.removeClass(e.target._path, 'gd-hover');
       });
-      lyr.bindPopup(_popupRoad(r), { maxWidth: 280, className: 'gd-popup', autoPanPadding: [50,50] });
+      lyr.bindPopup(_popupRoad(r), { maxWidth: 280, className: 'gd-popup', autoPanPadding: [50, 50] });
       lRoads.addLayer(lyr);
       lyr._gdMeta = { type: 'road', id: r.id, name: r.name, color: r.color };
       _collectBounds(lyr);
@@ -332,12 +332,12 @@ function _renderData(data) {
     if (!geo || !geo.type) return;
     try {
       var COLORS = {
-        faible:   GD_COLORS.flood_faible,
-        modere:   GD_COLORS.flood_modere,
-        eleve:    GD_COLORS.flood_eleve,
+        faible: GD_COLORS.flood_faible,
+        modere: GD_COLORS.flood_modere,
+        eleve: GD_COLORS.flood_eleve,
         critique: GD_COLORS.flood_critique,
       };
-      var c   = COLORS[f.risk_level] || GD_COLORS.flood;
+      var c = COLORS[f.risk_level] || GD_COLORS.flood;
       var lyr = null;
 
       if (geo.type === 'Polygon') {
@@ -417,7 +417,7 @@ function _renderData(data) {
         return;
       }
 
-      lyr.bindPopup(_popupFlood(f), { maxWidth: 280, className: 'gd-popup', autoPanPadding: [50,50] });
+      lyr.bindPopup(_popupFlood(f), { maxWidth: 280, className: 'gd-popup', autoPanPadding: [50, 50] });
       lyr._gdMeta = { type: 'flood', id: f.id, name: f.name, color: c };
       lFloods.addLayer(lyr);
       _collectBounds(lyr);
@@ -430,12 +430,12 @@ function _renderData(data) {
     if (!geo) return;
     try {
       var COLORS = {
-        sparse:     GD_COLORS.veg_sparse,
-        moderate:   GD_COLORS.veg_moderate,
-        dense:      GD_COLORS.veg_dense,
+        sparse: GD_COLORS.veg_sparse,
+        moderate: GD_COLORS.veg_moderate,
+        dense: GD_COLORS.veg_dense,
         very_dense: GD_COLORS.veg_very_dense,
       };
-      var c    = COLORS[v.density_class] || GD_COLORS.vegetation;
+      var c = COLORS[v.density_class] || GD_COLORS.vegetation;
       var opts = { color: c, fillColor: c, weight: 1.5, opacity: .7, fillOpacity: .2, dashArray: '6,4' };
       var coords;
       if (geo.type === 'Polygon') {
@@ -457,7 +457,7 @@ function _renderData(data) {
         this.setStyle({ fillOpacity: .2, opacity: .7, weight: 1.5, dashArray: '6,4' });
         L.DomUtil.removeClass(e.target._path, 'gd-hover');
       });
-      lyr.bindPopup(_popupVeg(v), { maxWidth: 280, className: 'gd-popup', autoPanPadding: [50,50] });
+      lyr.bindPopup(_popupVeg(v), { maxWidth: 280, className: 'gd-popup', autoPanPadding: [50, 50] });
       lyr._gdMeta = { type: 'vegetation', id: v.id, name: v.name, color: c };
       lVeg.addLayer(lyr);
       _collectBounds(lyr);
@@ -487,7 +487,7 @@ function _collectBounds(lyr) {
   try {
     var b = lyr.getBounds();
     if (b && b.isValid()) _allBounds.push(b.getSouthWest(), b.getNorthEast());
-  } catch (_) {}
+  } catch (_) { }
 }
 
 
@@ -512,32 +512,32 @@ function updateDegradationScore(routes) {
     return;
   }
 
-  var total    = routes.length;
+  var total = routes.length;
   var degraded = 0;
   var critical = 0;
 
   routes.forEach(function (r) {
     var sc = parseFloat(r.condition_score);
     if (isNaN(sc)) return;
-    if (sc < 40)      critical++;
+    if (sc < 40) critical++;
     else if (sc < 70) degraded++;
   });
 
   var affected = degraded + critical;
-  var pct      = Math.round((affected / total) * 100);
+  var pct = Math.round((affected / total) * 100);
 
   var color, cssClass;
   if (pct < 20) {
     color = 'var(--green2)'; cssClass = 'kpi-value good';
   } else if (pct < 50) {
-    color = '#e67e22';       cssClass = 'kpi-value warn';
+    color = '#e67e22'; cssClass = 'kpi-value warn';
   } else {
-    color = 'var(--red)';   cssClass = 'kpi-value danger';
+    color = 'var(--red)'; cssClass = 'kpi-value danger';
   }
 
   if (elVal) {
     elVal.textContent = pct + ' %';
-    elVal.className   = cssClass;
+    elVal.className = cssClass;
   }
 
   if (elSub) {
@@ -550,7 +550,7 @@ function updateDegradationScore(routes) {
   }
 
   if (elBar) {
-    elBar.style.width      = Math.min(pct, 100) + '%';
+    elBar.style.width = Math.min(pct, 100) + '%';
     elBar.style.background = color;
   }
 }
@@ -561,9 +561,9 @@ function updateDegradationScore(routes) {
 function _bar(pct, color, labelLeft, labelRight) {
   var labels = (labelLeft || labelRight)
     ? '<div class="pp-bar-label">'
-      + '<span>' + (labelLeft  || '') + '</span>'
-      + '<span>' + (labelRight || '') + '</span>'
-      + '</div>'
+    + '<span>' + (labelLeft || '') + '</span>'
+    + '<span>' + (labelRight || '') + '</span>'
+    + '</div>'
     : '';
   return '<div class="pp-bar">'
     + '<div class="pp-bar-f" style="width:' + Math.min(pct, 100) + '%;background:' + color + '"></div>'
@@ -578,37 +578,37 @@ function _scoreColor(score) {
 
 function _popupRoad(r) {
   var sc = r.condition_score || 0;
-  var c  = r.color || _scoreColor(sc);
+  var c = r.color || _scoreColor(sc);
   var status = (r.status_label || r.status || '—');
   return '<div class="popup-inner">'
     + '<div class="popup-hdr">'
-    +   '<div class="popup-type">Route</div>'
-    +   '<div class="popup-name">' + (r.name || 'Route inconnue') + '</div>'
+    + '<div class="popup-type">Route</div>'
+    + '<div class="popup-name">' + (r.name || 'Route inconnue') + '</div>'
     + '</div>'
     + '<div class="popup-body">'
-    +   '<div class="popup-row">'
-    +     '<span class="popup-lbl">Score état</span>'
-    +     '<span class="popup-val" style="color:' + c + '">' + sc + '<small style="color:var(--t4);font-weight:400">/100</small></span>'
-    +   '</div>'
-    +   _bar(sc, c, '0', '100')
-    +   '<div class="popup-row">'
-    +     '<span class="popup-lbl">Surface</span>'
-    +     '<span class="popup-val">' + (r.surface_type || '—') + '</span>'
-    +   '</div>'
+    + '<div class="popup-row">'
+    + '<span class="popup-lbl">Score état</span>'
+    + '<span class="popup-val" style="color:' + c + '">' + sc + '<small style="color:var(--t4);font-weight:400">/100</small></span>'
+    + '</div>'
+    + _bar(sc, c, '0', '100')
+    + '<div class="popup-row">'
+    + '<span class="popup-lbl">Surface</span>'
+    + '<span class="popup-val">' + (r.surface_type || '—') + '</span>'
+    + '</div>'
     + (r.last_inspection
       ? '<div class="popup-row">'
-        + '<span class="popup-lbl">Dernière inspection</span>'
-        + '<span class="popup-val">' + r.last_inspection + '</span>'
-        + '</div>'
+      + '<span class="popup-lbl">Dernière inspection</span>'
+      + '<span class="popup-val">' + r.last_inspection + '</span>'
+      + '</div>'
       : '')
     + (r.notes
       ? '<div class="popup-notes">' + r.notes + '</div>'
       : '')
     + '</div>'
     + '<div class="popup-footer">'
-    +   '<span class="popup-badge badge-' + (r.status || 'ferme') + '">'
-    +     '<span class="badge-dot"></span>' + status
-    +   '</span>'
+    + '<span class="popup-badge badge-' + (r.status || 'ferme') + '">'
+    + '<span class="badge-dot"></span>' + status
+    + '</span>'
     + '</div>'
     + '</div>';
 }
@@ -616,34 +616,34 @@ function _popupRoad(r) {
 function _popupFlood(f) {
   var rs = f.risk_score || 0;
   var COLORS = {
-    faible:   GD_COLORS.flood_faible,
-    modere:   GD_COLORS.flood_modere,
-    eleve:    GD_COLORS.flood_eleve,
+    faible: GD_COLORS.flood_faible,
+    modere: GD_COLORS.flood_modere,
+    eleve: GD_COLORS.flood_eleve,
     critique: GD_COLORS.flood_critique,
   };
   var c = COLORS[f.risk_level] || GD_COLORS.flood;
   return '<div class="popup-inner">'
     + '<div class="popup-hdr">'
-    +   '<div class="popup-type">Zone inondation</div>'
-    +   '<div class="popup-name">' + (f.name || 'Zone inconnue') + '</div>'
+    + '<div class="popup-type">Zone inondation</div>'
+    + '<div class="popup-name">' + (f.name || 'Zone inconnue') + '</div>'
     + '</div>'
     + '<div class="popup-body">'
-    +   '<div class="popup-row">'
-    +     '<span class="popup-lbl">Score de risque</span>'
-    +     '<span class="popup-val" style="color:' + c + '">' + rs + '<small style="color:var(--t4);font-weight:400">/100</small></span>'
-    +   '</div>'
-    +   _bar(rs, c, 'Faible', 'Critique')
-    +   '<div class="popup-row"><span class="popup-lbl">Niveau</span>'
-    +     '<span class="popup-val">' + (f.risk_label || f.risk_level || '—') + '</span></div>'
-    +   '<div class="popup-row"><span class="popup-lbl">Surface</span>'
-    +     '<span class="popup-val">' + (f.area_km2 || '—') + ' km²</span></div>'
-    +   '<div class="popup-row"><span class="popup-lbl">Pluviométrie</span>'
-    +     '<span class="popup-val">' + (f.rainfall_mm || '—') + ' mm</span></div>'
+    + '<div class="popup-row">'
+    + '<span class="popup-lbl">Score de risque</span>'
+    + '<span class="popup-val" style="color:' + c + '">' + rs + '<small style="color:var(--t4);font-weight:400">/100</small></span>'
+    + '</div>'
+    + _bar(rs, c, 'Faible', 'Critique')
+    + '<div class="popup-row"><span class="popup-lbl">Niveau</span>'
+    + '<span class="popup-val">' + (f.risk_label || f.risk_level || '—') + '</span></div>'
+    + '<div class="popup-row"><span class="popup-lbl">Surface</span>'
+    + '<span class="popup-val">' + (f.area_km2 || '—') + ' km²</span></div>'
+    + '<div class="popup-row"><span class="popup-lbl">Pluviométrie</span>'
+    + '<span class="popup-val">' + (f.rainfall_mm || '—') + ' mm</span></div>'
     + '</div>'
     + '<div class="popup-footer">'
-    +   '<span class="popup-badge badge-' + (f.risk_level === 'critique' ? 'critique' : f.risk_level === 'eleve' ? 'degrade' : 'bon') + '">'
-    +     '<span class="badge-dot"></span>' + (f.risk_label || f.risk_level || 'Inondation')
-    +   '</span>'
+    + '<span class="popup-badge badge-' + (f.risk_level === 'critique' ? 'critique' : f.risk_level === 'eleve' ? 'degrade' : 'bon') + '">'
+    + '<span class="badge-dot"></span>' + (f.risk_label || f.risk_level || 'Inondation')
+    + '</span>'
     + '</div>'
     + '</div>';
 }
@@ -652,34 +652,34 @@ function _popupVeg(v) {
   var ndvi = v.ndvi_value || 0;
   var ndviPct = Math.round(((ndvi + 1) / 2) * 100);
   var COLORS = {
-    sparse:     GD_COLORS.veg_sparse,
-    moderate:   GD_COLORS.veg_moderate,
-    dense:      GD_COLORS.veg_dense,
+    sparse: GD_COLORS.veg_sparse,
+    moderate: GD_COLORS.veg_moderate,
+    dense: GD_COLORS.veg_dense,
     very_dense: GD_COLORS.veg_very_dense,
   };
   var c = COLORS[v.density_class] || GD_COLORS.vegetation;
   return '<div class="popup-inner">'
     + '<div class="popup-hdr">'
-    +   '<div class="popup-type">Végétation</div>'
-    +   '<div class="popup-name">' + (v.name || 'Zone végétale') + '</div>'
+    + '<div class="popup-type">Végétation</div>'
+    + '<div class="popup-name">' + (v.name || 'Zone végétale') + '</div>'
     + '</div>'
     + '<div class="popup-body">'
-    +   '<div class="popup-row"><span class="popup-lbl">NDVI</span>'
-    +     '<span class="popup-val" style="color:' + c + '">' + ndvi.toFixed(3) + '</span></div>'
-    +   _bar(ndviPct, c, '-1', '+1')
-    +   '<div class="popup-row"><span class="popup-lbl">Couverture</span>'
-    +     '<span class="popup-val">' + (v.coverage_percent || '—') + '%</span></div>'
-    +   '<div class="popup-row"><span class="popup-lbl">Classe</span>'
-    +     '<span class="popup-val">' + (v.density_label || v.density_class || '—') + '</span></div>'
+    + '<div class="popup-row"><span class="popup-lbl">NDVI</span>'
+    + '<span class="popup-val" style="color:' + c + '">' + ndvi.toFixed(3) + '</span></div>'
+    + _bar(ndviPct, c, '-1', '+1')
+    + '<div class="popup-row"><span class="popup-lbl">Couverture</span>'
+    + '<span class="popup-val">' + (v.coverage_percent || '—') + '%</span></div>'
+    + '<div class="popup-row"><span class="popup-lbl">Classe</span>'
+    + '<span class="popup-val">' + (v.density_label || v.density_class || '—') + '</span></div>'
     + (v.area_ha
       ? '<div class="popup-row"><span class="popup-lbl">Surface</span>'
-        + '<span class="popup-val">' + v.area_ha + ' ha</span></div>'
+      + '<span class="popup-val">' + v.area_ha + ' ha</span></div>'
       : '')
     + '</div>'
     + '<div class="popup-footer">'
-    +   '<span class="popup-badge" style="background:rgba(78,205,128,.1);color:var(--green2);border:1px solid rgba(78,205,128,.25)">'
-    +     '<span class="badge-dot"></span>' + (v.density_label || v.density_class || 'Végétation')
-    +   '</span>'
+    + '<span class="popup-badge" style="background:rgba(78,205,128,.1);color:var(--green2);border:1px solid rgba(78,205,128,.25)">'
+    + '<span class="badge-dot"></span>' + (v.density_label || v.density_class || 'Végétation')
+    + '</span>'
     + '</div>'
     + '</div>';
 }
@@ -707,87 +707,90 @@ var _activeLayer = 'all';
 var _LEGEND_CONTENT = {
   all: function () {
     return [
-      { type: 'title',   text: 'Légende' },
+      { type: 'title', text: 'Légende' },
       { type: 'section', text: 'Routes' },
-      { type: 'line',  color: '#28b857', label: 'Bon état  (≥ 70/100)' },
-      { type: 'line',  color: '#e67e22', label: 'Dégradé  (40-69/100)' },
-      { type: 'line',  color: '#f43f5e', label: 'Critique  (10-39/100)' },
-      { type: 'line',  color: '#94a3b8', label: 'Fermé  (< 10/100)', dashed: true },
+      { type: 'line', color: '#28b857', label: 'Bon état  (≥ 70/100)' },
+      { type: 'line', color: '#e67e22', label: 'Dégradé  (40-69/100)' },
+      { type: 'line', color: '#f43f5e', label: 'Critique  (10-39/100)' },
+      { type: 'line', color: '#94a3b8', label: 'Fermé  (< 10/100)', dashed: true },
       { type: 'sep' },
       { type: 'section', text: 'Zones hydrographiques' },
-      { type: 'poly',  color: '#22d3ee', label: 'Risque faible  (< 25)' },
-      { type: 'poly',  color: '#3b82f6', label: 'Risque modéré  (25-49)' },
-      { type: 'poly',  color: '#f97316', label: 'Risque élevé  (50-74)' },
-      { type: 'poly',  color: '#dc2626', label: 'Risque critique  (≥ 75)' },
+      { type: 'poly', color: '#22d3ee', label: 'Risque faible  (< 25)' },
+      { type: 'poly', color: '#3b82f6', label: 'Risque modéré  (25-49)' },
+      { type: 'poly', color: '#f97316', label: 'Risque élevé  (50-74)' },
+      { type: 'poly', color: '#dc2626', label: 'Risque critique  (≥ 75)' },
       { type: 'sep' },
       { type: 'section', text: 'Végétation (OSM)' },
-      { type: 'poly',  color: '#bef264', label: 'Éparse  (NDVI < 0.20)',  opacity: .6 },
-      { type: 'poly',  color: '#4ade80', label: 'Modérée  (0.20-0.39)',   opacity: .6 },
-      { type: 'poly',  color: '#16a34a', label: 'Dense  (0.40-0.59)',     opacity: .6 },
-      { type: 'poly',  color: '#14532d', label: 'Très dense  (≥ 0.60)',   opacity: .6 },
+      { type: 'poly', color: '#bef264', label: 'Éparse  (NDVI < 0.20)', opacity: .6 },
+      { type: 'poly', color: '#4ade80', label: 'Modérée  (0.20-0.39)', opacity: .6 },
+      { type: 'poly', color: '#16a34a', label: 'Dense  (0.40-0.59)', opacity: .6 },
+      { type: 'poly', color: '#14532d', label: 'Très dense  (≥ 0.60)', opacity: .6 },
     ].concat(_legendGeeRows());
   },
   roads: function () {
     return [
       { type: 'title', text: 'Routes — État' },
-      { type: 'scale-bar',
+      {
+        type: 'scale-bar',
         label: 'Score de condition (0-100)',
         stops: [
-          { pct: 0,   color: '#94a3b8', label: '0' },
-          { pct: 10,  color: '#ef4444', label: '10' },
-          { pct: 40,  color: '#f97316', label: '40' },
-          { pct: 70,  color: '#22c55e', label: '70' },
+          { pct: 0, color: '#94a3b8', label: '0' },
+          { pct: 10, color: '#ef4444', label: '10' },
+          { pct: 40, color: '#f97316', label: '40' },
+          { pct: 70, color: '#22c55e', label: '70' },
           { pct: 100, color: '#0e9f6e', label: '100' },
         ]
       },
       { type: 'sep' },
-      { type: 'line',  color: '#28b857', label: 'Bon — Surface praticable' },
-      { type: 'line',  color: '#e67e22', label: 'Dégradé — Ralentissement' },
-      { type: 'line',  color: '#f43f5e', label: 'Critique — Risque accès' },
-      { type: 'line',  color: '#94a3b8', label: 'Fermé — Inaccessible', dashed: true },
+      { type: 'line', color: '#28b857', label: 'Bon — Surface praticable' },
+      { type: 'line', color: '#e67e22', label: 'Dégradé — Ralentissement' },
+      { type: 'line', color: '#f43f5e', label: 'Critique — Risque accès' },
+      { type: 'line', color: '#94a3b8', label: 'Fermé — Inaccessible', dashed: true },
       { type: 'sep' },
-      { type: 'info',  text: 'Score calculé depuis les tags OSM (smoothness, surface, highway)' },
+      { type: 'info', text: 'Score calculé depuis les tags OSM (smoothness, surface, highway)' },
     ];
   },
   floods: function () {
     return [
       { type: 'title', text: 'Inondations — Risque' },
-      { type: 'scale-bar',
+      {
+        type: 'scale-bar',
         label: 'Score de risque (0-100)',
         stops: [
-          { pct: 0,   color: '#22d3ee', label: '0' },
-          { pct: 25,  color: '#3b82f6', label: '25' },
-          { pct: 50,  color: '#f97316', label: '50' },
-          { pct: 75,  color: '#dc2626', label: '75' },
+          { pct: 0, color: '#22d3ee', label: '0' },
+          { pct: 25, color: '#3b82f6', label: '25' },
+          { pct: 50, color: '#f97316', label: '50' },
+          { pct: 75, color: '#dc2626', label: '75' },
           { pct: 100, color: '#7f1d1d', label: '100' },
         ]
       },
       { type: 'sep' },
-      { type: 'poly',  color: '#22d3ee', label: 'Faible  — Hors saison sèche' },
-      { type: 'poly',  color: '#3b82f6', label: 'Modéré — Surveillance' },
-      { type: 'poly',  color: '#f97316', label: 'Élevé  — Précautions requises' },
-      { type: 'poly',  color: '#dc2626', label: 'Critique — Évacuation possible' },
-      { type: 'line',  color: '#3b82f6', label: 'Cours d\'eau (rivière / canal)' },
+      { type: 'poly', color: '#22d3ee', label: 'Faible  — Hors saison sèche' },
+      { type: 'poly', color: '#3b82f6', label: 'Modéré — Surveillance' },
+      { type: 'poly', color: '#f97316', label: 'Élevé  — Précautions requises' },
+      { type: 'poly', color: '#dc2626', label: 'Critique — Évacuation possible' },
+      { type: 'line', color: '#3b82f6', label: 'Cours d\'eau (rivière / canal)' },
       { type: 'sep' },
     ].concat(_legendGeeRows('flood'));
   },
   vegetation: function () {
     return [
       { type: 'title', text: 'Végétation — NDVI' },
-      { type: 'scale-bar',
+      {
+        type: 'scale-bar',
         label: 'Indice NDVI (-1 à +1)',
         stops: [
-          { pct: 0,   color: '#d73027', label: '-1' },
-          { pct: 30,  color: '#fee08b', label: '0' },
-          { pct: 60,  color: '#66bd63', label: '0.4' },
+          { pct: 0, color: '#d73027', label: '-1' },
+          { pct: 30, color: '#fee08b', label: '0' },
+          { pct: 60, color: '#66bd63', label: '0.4' },
           { pct: 100, color: '#1a9850', label: '+1' },
         ]
       },
       { type: 'sep' },
-      { type: 'poly',  color: '#bef264', label: 'Éparse  NDVI < 0.20',    opacity: .6 },
-      { type: 'poly',  color: '#4ade80', label: 'Modérée NDVI 0.20-0.39', opacity: .6 },
-      { type: 'poly',  color: '#16a34a', label: 'Dense   NDVI 0.40-0.59', opacity: .6 },
-      { type: 'poly',  color: '#14532d', label: 'Très dense NDVI ≥ 0.60', opacity: .6 },
+      { type: 'poly', color: '#bef264', label: 'Éparse  NDVI < 0.20', opacity: .6 },
+      { type: 'poly', color: '#4ade80', label: 'Modérée NDVI 0.20-0.39', opacity: .6 },
+      { type: 'poly', color: '#16a34a', label: 'Dense   NDVI 0.40-0.59', opacity: .6 },
+      { type: 'poly', color: '#14532d', label: 'Très dense NDVI ≥ 0.60', opacity: .6 },
       { type: 'sep' },
       { type: 'info', text: 'NDVI > 0 = végétation, = 0 = sol nu, < 0 = eau/nuage' },
     ].concat(_legendGeeRows('ndvi'));
@@ -795,19 +798,20 @@ var _LEGEND_CONTENT = {
   degradation: function () {
     return [
       { type: 'title', text: 'Dégradation routes' },
-      { type: 'scale-bar',
+      {
+        type: 'scale-bar',
         label: 'Score de dégradation (0-100 %)',
         stops: [
-          { pct: 0,   color: '#22c55e', label: '0 %' },
-          { pct: 20,  color: '#f97316', label: '20 %' },
-          { pct: 50,  color: '#ef4444', label: '50 %' },
+          { pct: 0, color: '#22c55e', label: '0 %' },
+          { pct: 20, color: '#f97316', label: '20 %' },
+          { pct: 50, color: '#ef4444', label: '50 %' },
           { pct: 100, color: '#7f1d1d', label: '100 %' },
         ]
       },
       { type: 'sep' },
-      { type: 'line',  color: '#22c55e', label: '< 20 % — Faible dégradation' },
-      { type: 'line',  color: '#f97316', label: '20-50 % — Dégradation modérée' },
-      { type: 'line',  color: '#ef4444', label: '> 50 % — Dégradation sévère' },
+      { type: 'line', color: '#22c55e', label: '< 20 % — Faible dégradation' },
+      { type: 'line', color: '#f97316', label: '20-50 % — Dégradation modérée' },
+      { type: 'line', color: '#ef4444', label: '> 50 % — Dégradation sévère' },
       { type: 'sep' },
       { type: 'info', text: '% de segments avec score < 70/100 (dégradé ou critique)' },
     ];
@@ -819,11 +823,12 @@ function _legendGeeRows(context) {
   if (lGeeNdvi && context !== 'flood') {
     rows.push({ type: 'sep' });
     rows.push({ type: 'section', text: 'Satellite Sentinel-2 (GEE)' });
-    rows.push({ type: 'scale-bar',
+    rows.push({
+      type: 'scale-bar',
       label: 'NDVI satellite',
       stops: [
-        { pct: 0,   color: '#d73027', label: '0.0' },
-        { pct: 50,  color: '#fee08b', label: '0.4' },
+        { pct: 0, color: '#d73027', label: '0.0' },
+        { pct: 50, color: '#fee08b', label: '0.4' },
         { pct: 100, color: '#1a9850', label: '0.8' },
       ]
     });
@@ -938,15 +943,15 @@ function setLayer(type, btn) {
   if (!map) return;
 
   var vis = {
-    all:         { roads: 1, floods: 1, vegetation: 1 },
-    roads:       { roads: 1, floods: 0, vegetation: 0 },
-    floods:      { roads: 0, floods: 1, vegetation: 0 },
-    vegetation:  { roads: 0, floods: 0, vegetation: 1 },
+    all: { roads: 1, floods: 1, vegetation: 1 },
+    roads: { roads: 1, floods: 0, vegetation: 0 },
+    floods: { roads: 0, floods: 1, vegetation: 0 },
+    vegetation: { roads: 0, floods: 0, vegetation: 1 },
     degradation: { roads: 1, floods: 0, vegetation: 0 },
   }[type] || { roads: 1, floods: 1, vegetation: 1 };
 
   Object.keys(vis).forEach(function (k) {
-    var v  = vis[k];
+    var v = vis[k];
     var lg = layerRef[k]();
     if (!lg) return;
     v ? map.addLayer(lg) : map.removeLayer(lg);
@@ -967,7 +972,7 @@ function _flyToLayer(type) {
   var lg = layerRef[type] ? layerRef[type]() : null;
   if (!lg) return false;
 
-  var bounds      = [];
+  var bounds = [];
   var totalLayers = 0;
 
   lg.getLayers().forEach(function (l) {
@@ -975,7 +980,7 @@ function _flyToLayer(type) {
     try {
       var b = l.getBounds ? l.getBounds() : null;
       if (b && b.isValid()) bounds.push(b.getSouthWest(), b.getNorthEast());
-    } catch (_) {}
+    } catch (_) { }
   });
 
   if (bounds.length) {
@@ -1031,11 +1036,11 @@ function refreshGeeLayer(zoneCode) {
       lGeeNdvi.addTo(map);
 
       var ndviVal = parseFloat(data.mean_ndvi || 0);
-      var ndviEl  = document.getElementById('kpiNdvi')
-                 || document.querySelector('.kpi-card[data-layer="vegetation"] .kpi-value');
+      var ndviEl = document.getElementById('kpiNdvi')
+        || document.querySelector('.kpi-card[data-layer="vegetation"] .kpi-value');
       if (ndviEl) {
         ndviEl.textContent = ndviVal.toFixed(3);
-        ndviEl.className   = ndviEl.className.replace(/\b(good|warn|danger)\b/g, '');
+        ndviEl.className = ndviEl.className.replace(/\b(good|warn|danger)\b/g, '');
         ndviEl.classList.add(ndviVal > 0.4 ? 'good' : ndviVal > 0.2 ? 'warn' : 'danger');
       }
       var ndviSub = document.querySelector('.kpi-card[data-layer="vegetation"] .kpi-sub');
@@ -1088,7 +1093,7 @@ function _updateExportLinks() {
 
   var csvLink = document.querySelector('a[href*="/api/alerts/export/"]');
   if (csvLink) {
-    csvLink.href  = '/api/alerts/export/' + suffix;
+    csvLink.href = '/api/alerts/export/' + suffix;
     csvLink.title = _activeZoneCode
       ? 'Exporter les alertes de ' + _activeZoneCode + ' (CSV)'
       : 'Exporter toutes les alertes (CSV)';
@@ -1096,7 +1101,7 @@ function _updateExportLinks() {
 
   var geoLink = document.querySelector('a[href*="/api/roads/export/"]');
   if (geoLink) {
-    geoLink.href  = '/api/roads/export/' + suffix;
+    geoLink.href = '/api/roads/export/' + suffix;
     geoLink.title = _activeZoneCode
       ? 'Exporter les routes de ' + _activeZoneCode + ' (GeoJSON)'
       : 'Exporter toutes les routes (GeoJSON)';
@@ -1110,12 +1115,12 @@ function _placeAlertMarker(lat, lng, color) {
 
   var icon = L.divIcon({
     className: '',
-    iconSize:  [36, 36],
-    iconAnchor:[18, 18],
+    iconSize: [36, 36],
+    iconAnchor: [18, 18],
     html: '<div class="alert-pulse-marker" style="--mc:' + (color || GD_COLORS.alert) + '">'
-        + '<div class="apm-ring"></div>'
-        + '<div class="apm-dot"></div>'
-        + '</div>',
+      + '<div class="apm-ring"></div>'
+      + '<div class="apm-dot"></div>'
+      + '</div>',
   });
   _alertMarker = L.marker([lat, lng], { icon: icon, zIndexOffset: 1000 });
   _alertMarker.addTo(map);
@@ -1144,7 +1149,7 @@ function focusAlert(lat, lng, category, zoneLat, zoneLng) {
   if (!map || !_mapReady) return;
 
   var color = GD_COLORS[category] || GD_COLORS.alert;
-  var ZOOM_MAP = { road: 17, flood: 14, vegetation: 14 };
+  var ZOOM_MAP = { road: 14, flood: 12, vegetation: 12 };
   var targetZoom = ZOOM_MAP[category] || 16;
 
   /* 1. Coordonnées précises de l'alerte */
@@ -1210,7 +1215,7 @@ function refreshAlerts() {
         pill.className = 'alert-pill ' + (count > 0 ? 'hot' : 'ok');
         pill.innerHTML = count > 0
           ? '<svg width="11" height="11" aria-hidden="true"><use href="#i-alert"></use></svg> '
-            + count + ' ALERTE' + (count > 1 ? 'S' : '')
+          + count + ' ALERTE' + (count > 1 ? 'S' : '')
           : '<svg width="11" height="11" aria-hidden="true"><use href="#i-check"></use></svg> RAS';
       }
 
@@ -1231,13 +1236,13 @@ function refreshAlerts() {
 function _getChartTheme() {
   var dark = document.documentElement.getAttribute('data-theme') === 'dark';
   return {
-    grid:  dark ? 'rgba(44,56,80,.8)'   : 'rgba(200,210,230,.5)',
-    tick:  dark ? '#4e5d80'             : '#8892aa',
-    label: dark ? '#8d9dc0'             : '#8892aa',
-    bg:    dark ? 'rgba(22,29,43,.95)'  : 'rgba(255,255,255,.95)',
-    title: dark ? '#e2e8f5'             : '#1a2035',
-    body:  dark ? '#8d9dc0'             : '#4a5578',
-    bdr:   dark ? '#2c3850'             : '#d8dcea',
+    grid: dark ? 'rgba(44,56,80,.8)' : 'rgba(200,210,230,.5)',
+    tick: dark ? '#4e5d80' : '#8892aa',
+    label: dark ? '#8d9dc0' : '#8892aa',
+    bg: dark ? 'rgba(22,29,43,.95)' : 'rgba(255,255,255,.95)',
+    title: dark ? '#e2e8f5' : '#1a2035',
+    body: dark ? '#8d9dc0' : '#4a5578',
+    bdr: dark ? '#2c3850' : '#d8dcea',
   };
 }
 
@@ -1248,40 +1253,40 @@ function _getChartTheme() {
 
 var _KPI_TOOLTIPS = {
   roads: {
-    title:  'Santé routière',
-    body:   'Moyenne des scores de condition sur tous les segments de la zone. '
-          + 'Score calculé depuis les attributs OSM : type de voie, revêtement, '
-          + 'état déclaré (smoothness). ≥ 70 = bon état, 40-69 = dégradé, < 40 = critique.',
+    title: 'Santé routière',
+    body: 'Moyenne des scores de condition sur tous les segments de la zone. '
+      + 'Score calculé depuis les attributs OSM : type de voie, revêtement, '
+      + 'état déclaré (smoothness). ≥ 70 = bon état, 40-69 = dégradé, < 40 = critique.',
     method: 'Source : OpenStreetMap via Overpass API',
-    color:  'var(--blue)',
+    color: 'var(--blue)',
   },
   floods: {
-    title:  'Risque inondation',
-    body:   'Score moyen de risque d\'inondation calculé par zone hydrographique. '
-          + 'Combinaison de la proximité aux cours d\'eau, du type d\'élément OSM '
-          + '(river, canal, wetland) et — quand disponible — des données SAR Sentinel-1 '
-          + 'via Google Earth Engine.',
+    title: 'Risque inondation',
+    body: 'Score moyen de risque d\'inondation calculé par zone hydrographique. '
+      + 'Combinaison de la proximité aux cours d\'eau, du type d\'élément OSM '
+      + '(river, canal, wetland) et — quand disponible — des données SAR Sentinel-1 '
+      + 'via Google Earth Engine.',
     method: 'Source : OSM + Sentinel-1 SAR (GEE)',
-    color:  'var(--teal)',
+    color: 'var(--teal)',
   },
   vegetation: {
-    title:  'NDVI moyen',
-    body:   'Indice de végétation (Normalized Difference Vegetation Index). '
-          + 'Valeur de -1 à +1 : > 0.6 = forêt dense, 0.2-0.6 = végétation modérée, '
-          + '< 0.2 = sol nu / urbain. '
-          + 'Valeur satellite (Sentinel-2) affichée quand GEE est disponible, '
-          + 'sinon valeur OSM estimée.',
+    title: 'NDVI moyen',
+    body: 'Indice de végétation (Normalized Difference Vegetation Index). '
+      + 'Valeur de -1 à +1 : > 0.6 = forêt dense, 0.2-0.6 = végétation modérée, '
+      + '< 0.2 = sol nu / urbain. '
+      + 'Valeur satellite (Sentinel-2) affichée quand GEE est disponible, '
+      + 'sinon valeur OSM estimée.',
     method: 'Source : Sentinel-2 SR via GEE / OSM',
-    color:  'var(--green2)',
+    color: 'var(--green2)',
   },
   degradation: {
-    title:  'Score dégradation',
-    body:   'Proportion (%) de segments routiers dont le score de condition '
-          + 'est inférieur à 70/100 (état dégradé ou critique). '
-          + 'Calculé en temps réel depuis les routes chargées dans la zone. '
-          + '< 20 % = faible, 20-50 % = modérée, > 50 % = sévère.',
+    title: 'Score dégradation',
+    body: 'Proportion (%) de segments routiers dont le score de condition '
+      + 'est inférieur à 70/100 (état dégradé ou critique). '
+      + 'Calculé en temps réel depuis les routes chargées dans la zone. '
+      + '< 20 % = faible, 20-50 % = modérée, > 50 % = sévère.',
     method: 'Calcul : routes (score < 70) ÷ total routes × 100',
-    color:  'var(--red)',
+    color: 'var(--red)',
   },
 };
 
@@ -1328,7 +1333,7 @@ function initCharts(routesData, floodsData, avgScore) {
     return;
   }
 
-  var th   = _getChartTheme();
+  var th = _getChartTheme();
   var mono = { family: "'DM Mono', monospace", size: 10 };
   var sans = { family: "'DM Sans', system-ui, sans-serif", size: 10 };
 
@@ -1343,11 +1348,11 @@ function initCharts(routesData, floodsData, avgScore) {
     new Chart(rdCtx, {
       type: 'bar',
       data: {
-        labels:   routesData.labels || [],
+        labels: routesData.labels || [],
         datasets: [{
-          data:            routesData.values || [],
+          data: routesData.values || [],
           backgroundColor: (routesData.colors || []).map(function (c) { return c + '99'; }),
-          borderColor:     routesData.colors || [],
+          borderColor: routesData.colors || [],
           borderWidth: 1, borderRadius: 5,
         }],
       },
@@ -1368,11 +1373,11 @@ function initCharts(routesData, floodsData, avgScore) {
     new Chart(flCtx, {
       type: 'doughnut',
       data: {
-        labels:   floodsData.labels || [],
+        labels: floodsData.labels || [],
         datasets: [{
-          data:            floodsData.values || [],
+          data: floodsData.values || [],
           backgroundColor: (floodsData.colors || []).map(function (c) { return c + '99'; }),
-          borderColor:     floodsData.colors || [],
+          borderColor: floodsData.colors || [],
           borderWidth: 1,
         }],
       },
@@ -1391,8 +1396,8 @@ function initCharts(routesData, floodsData, avgScore) {
   }
 
   var score = parseFloat(avgScore) || 0;
-  var gc    = score >= 70 ? '#00d97e' : score >= 40 ? '#f97316' : '#ef4444';
-  var gBg   = document.documentElement.getAttribute('data-theme') === 'dark' ? '#1e253a' : '#eef3fd';
+  var gc = score >= 70 ? '#00d97e' : score >= 40 ? '#f97316' : '#ef4444';
+  var gBg = document.documentElement.getAttribute('data-theme') === 'dark' ? '#1e253a' : '#eef3fd';
 
   var gaCtx = document.getElementById('cGauge');
   if (gaCtx) {
@@ -1400,9 +1405,9 @@ function initCharts(routesData, floodsData, avgScore) {
       type: 'doughnut',
       data: {
         datasets: [{
-          data:            [score, 100 - score],
+          data: [score, 100 - score],
           backgroundColor: [gc + 'cc', gBg],
-          borderWidth:     0,
+          borderWidth: 0,
         }],
       },
       options: {
@@ -1428,7 +1433,7 @@ function toast(msg, type) {
   var wrap = document.getElementById('toasts');
   if (!wrap) return;
   var t = document.createElement('div');
-  t.className   = 'toast ' + type;
+  t.className = 'toast ' + type;
   t.textContent = msg;
   wrap.appendChild(t);
   setTimeout(function () {
@@ -1454,17 +1459,17 @@ function _loadSettings() {
   try {
     var storedTheme = localStorage.getItem('gd-theme');
     if (storedTheme === 'dark' || storedTheme === 'light') _settings.theme = storedTheme;
-  } catch (e) {}
+  } catch (e) { }
 }
 
 function _saveSettings() {
-  try { localStorage.setItem('gd-settings', JSON.stringify(_settings)); } catch (e) {}
+  try { localStorage.setItem('gd-settings', JSON.stringify(_settings)); } catch (e) { }
 }
 
 function openSettings() {
   _loadSettings();
   _populateSettingsUI();
-  var drawer   = document.getElementById('settingsDrawer');
+  var drawer = document.getElementById('settingsDrawer');
   var backdrop = document.getElementById('settingsBackdrop');
   if (!drawer || !backdrop) return;
   backdrop.classList.add('open');
@@ -1475,9 +1480,9 @@ function openSettings() {
 }
 
 function closeSettings() {
-  var drawer   = document.getElementById('settingsDrawer');
+  var drawer = document.getElementById('settingsDrawer');
   var backdrop = document.getElementById('settingsBackdrop');
-  if (drawer)   drawer.classList.remove('open');
+  if (drawer) drawer.classList.remove('open');
   if (backdrop) backdrop.classList.remove('open');
   document.body.style.overflow = '';
 }
@@ -1503,9 +1508,9 @@ function _setSelect(id, val) { var el = document.getElementById(id); if (el) el.
 
 function _setSlider(sliderId, valId, val, suffix) {
   var slider = document.getElementById(sliderId);
-  var label  = document.getElementById(valId);
+  var label = document.getElementById(valId);
   if (slider) { slider.value = val; _updateSliderGradient(slider); }
-  if (label)  label.textContent = val + (suffix || '');
+  if (label) label.textContent = val + (suffix || '');
 }
 
 function _setRadio(groupClass, val) {
@@ -1590,7 +1595,7 @@ function _buildTileLayer(style) {
 
   var layer = L.tileLayer(cfg.url, opts);
   layer.on('tileerror', function (ev) {
-    var tile    = ev.tile;
+    var tile = ev.tile;
     var retries = parseInt(tile.dataset.gdRetry || '0', 10);
     if (retries < 3) {
       tile.dataset.gdRetry = retries + 1;
@@ -1607,24 +1612,24 @@ function _applyTileStyle(style) {
   map.eachLayer(function (layer) { if (layer instanceof L.TileLayer) map.removeLayer(layer); });
   _tileLayer = _buildTileLayer(style);
   _tileLayer.addTo(map);
-  if (lRoads)  { map.removeLayer(lRoads);  lRoads.addTo(map); }
+  if (lRoads) { map.removeLayer(lRoads); lRoads.addTo(map); }
   if (lFloods) { map.removeLayer(lFloods); lFloods.addTo(map); }
-  if (lVeg)    { map.removeLayer(lVeg);    lVeg.addTo(map); }
+  if (lVeg) { map.removeLayer(lVeg); lVeg.addTo(map); }
   setTimeout(function () { if (map) map.invalidateSize({ animate: false }); }, 100);
 }
 
 var LANG_LABELS = {
   fr: { dashboard: 'Dashboard', routes: 'Routes', floods: 'Inondations', veg: 'Végétation', alerts: 'Alertes', settings: 'Paramètres' },
-  en: { dashboard: 'Dashboard', routes: 'Roads',  floods: 'Floods',      veg: 'Vegetation', alerts: 'Alerts',  settings: 'Settings'  },
+  en: { dashboard: 'Dashboard', routes: 'Roads', floods: 'Floods', veg: 'Vegetation', alerts: 'Alerts', settings: 'Settings' },
 };
 
 function _applyLang(lang) {
   var L2 = LANG_LABELS[lang] || LANG_LABELS.fr;
   var map2 = {
-    '[data-set-layer="all"]  .nav-item-label':        L2.dashboard,
-    '[data-set-layer="roads"] .nav-item-label':       L2.routes,
-    '[data-set-layer="floods"] .nav-item-label':      L2.floods,
-    '[data-set-layer="vegetation"] .nav-item-label':  L2.veg,
+    '[data-set-layer="all"]  .nav-item-label': L2.dashboard,
+    '[data-set-layer="roads"] .nav-item-label': L2.routes,
+    '[data-set-layer="floods"] .nav-item-label': L2.floods,
+    '[data-set-layer="vegetation"] .nav-item-label': L2.veg,
   };
   Object.keys(map2).forEach(function (sel) {
     var el = document.querySelector(sel);
@@ -1636,7 +1641,7 @@ function saveSettings() {
   var s = _settings;
 
   s.theme = document.documentElement.getAttribute('data-theme') || 'light';
-  try { localStorage.setItem('gd-theme', s.theme); } catch (e) {}
+  try { localStorage.setItem('gd-theme', s.theme); } catch (e) { }
 
   var da = document.querySelector('.densityBtns .sd-radio-btn.active');
   if (da) s.density = da.dataset.val;
@@ -1650,17 +1655,17 @@ function saveSettings() {
   var zs = document.getElementById('zoomSlider');
   if (zs) s.zoomDefault = parseInt(zs.value, 10);
 
-  var showScale  = document.getElementById('showScaleToggle');
+  var showScale = document.getElementById('showScaleToggle');
   var showLegend = document.getElementById('showLegendToggle');
   var soundAlert = document.getElementById('soundAlertToggle');
-  if (showScale)  s.showScale   = showScale.checked;
-  if (showLegend) s.showLegend  = showLegend.checked;
+  if (showScale) s.showScale = showScale.checked;
+  if (showLegend) s.showLegend = showLegend.checked;
   if (soundAlert) s.soundAlerts = soundAlert.checked;
 
   var rs = document.getElementById('refreshSelect');
   var al = document.getElementById('alertLevelSelect');
   if (rs) s.refreshInterval = parseInt(rs.value, 10);
-  if (al) s.alertMinLevel   = al.value;
+  if (al) s.alertMinLevel = al.value;
 
   _saveSettings();
   applySettings();
@@ -1714,9 +1719,9 @@ function initSettings() {
 
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeSettings(); });
 
-  var saveBtn  = document.getElementById('settingsSave');
+  var saveBtn = document.getElementById('settingsSave');
   var resetBtn = document.getElementById('settingsReset');
-  if (saveBtn)  saveBtn.addEventListener('click', saveSettings);
+  if (saveBtn) saveBtn.addEventListener('click', saveSettings);
   if (resetBtn) resetBtn.addEventListener('click', resetSettings);
 
   document.querySelectorAll('.sd-slider').forEach(function (sl) {
@@ -1740,7 +1745,7 @@ function initSettings() {
       }
       if (group && group.classList.contains('themeBtns')) {
         var picked = this.dataset.val;
-        var html   = document.documentElement;
+        var html = document.documentElement;
         if (html.getAttribute('data-theme') !== picked) {
           html.classList.add('theme-transitioning');
           html.setAttribute('data-theme', picked);
