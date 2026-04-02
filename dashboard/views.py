@@ -1,15 +1,22 @@
 """
 GéoDash — views.py
-Vue principale + API endpoints.
+Synchronisé avec models.py :
+  RoadSegment / FloodRisk / VegetationDensity / Alert
+
+Patch GEE appliqué :
+  - api_gee_ndvi / api_gee_flood / api_gee_road retournent désormais
+    200 + {"error": ..., "no_data": True} quand GEE renvoie None,
+    400 si le paramètre zone est absent, 500 sur erreur inattendue.
+  - _zone_bbox : delta porté à 0.5° (≈ 55 km) pour les analyses GEE.
 """
 import csv
 import json
 import logging
-from django.shortcuts import render, get_object_or_404
-from django.http import JsonResponse, HttpResponse
+from django.shortcuts  import render, get_object_or_404
+from django.http       import JsonResponse, HttpResponse
 from django.views.decorators.http import require_GET
-from django.db.models import Avg
-from django.utils import timezone
+from django.db.models  import Avg
+from django.utils      import timezone
 
 from .models import Zone, RoadSegment, FloodRisk, VegetationDensity, Alert
 
@@ -32,6 +39,7 @@ def _road_color(score):
     return "#94a3b8"
 
 def _geojson(obj):
+    """Retourne le geojson depuis un JSONField (dict ou string)."""
     g = getattr(obj, 'geojson', None)
     if not g:
         return None
@@ -43,6 +51,11 @@ def _geojson(obj):
         return None
 
 def _zone_bbox(zone):
+    """
+    Calcule une bounding box approximative autour du centroïde de la zone.
+    Rayon de ~0.5° (≈ 55 km) — suffisant pour les analyses régionales GEE.
+    Zone n'a pas de bbox → on retourne un bbox par défaut centré sur Abidjan.
+    """
     delta = 0.5
     if not zone:
         return {"west": -4.50, "south": 5.10, "east": -3.50, "north": 5.85}
@@ -55,10 +68,10 @@ def _zone_bbox(zone):
 
 def _gee_available():
     try:
-        from .gee_integration import is_gee_available, init_gee
-        if not is_gee_available():
+        from .gee_integration import _gee_initialized, init_gee
+        if not _gee_initialized:
             init_gee()
-        return is_gee_available()
+        return True
     except Exception:
         return False
 
@@ -73,9 +86,9 @@ def dashboard(request):
     if zone_code:
         selected_zone = Zone.objects.filter(code=zone_code).first()
 
-    roads_qs  = RoadSegment.objects.filter(zone=selected_zone) if selected_zone else RoadSegment.objects.all()
-    floods_qs = FloodRisk.objects.filter(zone=selected_zone) if selected_zone else FloodRisk.objects.all()
-    veg_qs    = VegetationDensity.objects.filter(zone=selected_zone) if selected_zone else VegetationDensity.objects.all()
+    roads_qs  = RoadSegment.objects.filter(zone=selected_zone)        if selected_zone else RoadSegment.objects.all()
+    floods_qs = FloodRisk.objects.filter(zone=selected_zone)          if selected_zone else FloodRisk.objects.all()
+    veg_qs    = VegetationDensity.objects.filter(zone=selected_zone)  if selected_zone else VegetationDensity.objects.all()
 
     map_data = {
         "routes": [
@@ -123,29 +136,49 @@ def dashboard(request):
         ],
     }
 
-    # KPI
     avg_val   = roads_qs.aggregate(avg=Avg("condition_score"))["avg"] or 0
     avg_score = round(float(avg_val), 1)
 
     center_lat = _js_num(selected_zone.lat_center if selected_zone else 5.35)
     center_lng = _js_num(selected_zone.lng_center if selected_zone else -4.00)
 
-    # Alertes
     alerts = Alert.objects.filter(
         zone=selected_zone, is_read=False
     ).order_by("-created_at")[:20] if selected_zone else \
              Alert.objects.filter(is_read=False).order_by("-created_at")[:20]
+
     unread = Alert.objects.filter(is_read=False).count()
 
-    # Stats
+    dist = {"0-25": 0, "26-50": 0, "51-75": 0, "76-100": 0}
+    for r in roads_qs:
+        sc = r.condition_score or 0
+        if sc <= 25:   dist["0-25"]   += 1
+        elif sc <= 50: dist["26-50"]  += 1
+        elif sc <= 75: dist["51-75"]  += 1
+        else:          dist["76-100"] += 1
+
+    chart_routes = {"labels": list(dist.keys()), "data": list(dist.values())}
+
+    flood_lvl = {"faible": 0, "modere": 0, "eleve": 0, "critique": 0}
+    for f in floods_qs:
+        if f.risk_level in flood_lvl:
+            flood_lvl[f.risk_level] += 1
+
+    chart_floods = {
+        "labels": ["Faible", "Modéré", "Élevé", "Critique"],
+        "data":   list(flood_lvl.values()),
+    }
+
     total_roads    = roads_qs.count()
     critical_roads = roads_qs.filter(condition_score__lt=40).count()
     road_health_pct = round(float(avg_score))
 
+    total_floods    = floods_qs.count()
     critical_floods = floods_qs.filter(risk_level__in=["eleve", "critique"]).count()
     avg_flood_val   = floods_qs.aggregate(avg=Avg("risk_score"))["avg"] or 0
     avg_flood_risk  = round(float(avg_flood_val))
 
+    total_veg  = veg_qs.count()
     dense_veg  = veg_qs.filter(density_class__in=["dense", "very_dense"]).count()
     avg_ndvi_v = veg_qs.aggregate(avg=Avg("ndvi_value"))["avg"] or 0
     avg_ndvi   = round(float(avg_ndvi_v), 3)
@@ -154,16 +187,20 @@ def dashboard(request):
         "zones":         zones,
         "selected_zone": selected_zone,
         "zone_code":     zone_code,
-        "map_data_json":     json.dumps(map_data),
-        "avg_score_json":    json.dumps(avg_score),
-        "center_lat_json":   json.dumps(center_lat),
-        "center_lng_json":   json.dumps(center_lng),
+       "map_data_json":     map_data,
+       "chart_routes_json": chart_routes,
+       "chart_floods_json": chart_floods,
+       "avg_score_json":    avg_score,
+       "center_lat_json":   center_lat,
+        "center_lng_json":   center_lng,
         "avg_road_score":  avg_score,
         "total_roads":     total_roads,
         "critical_roads":  critical_roads,
         "road_health_pct": road_health_pct,
+        "total_floods":    total_floods,
         "critical_floods": critical_floods,
         "avg_flood_risk":  avg_flood_risk,
+        "total_veg":       total_veg,
         "dense_veg":       dense_veg,
         "avg_ndvi":        avg_ndvi,
         "recent_alerts":   alerts,
@@ -182,9 +219,12 @@ def api_map_data(request):
     zone_code     = request.GET.get("zone", "")
     selected_zone = Zone.objects.filter(code=zone_code).first() if zone_code else None
 
-    roads_qs  = RoadSegment.objects.filter(zone=selected_zone) if selected_zone else RoadSegment.objects.all()
-    floods_qs = FloodRisk.objects.filter(zone=selected_zone) if selected_zone else FloodRisk.objects.all()
-    veg_qs    = VegetationDensity.objects.filter(zone=selected_zone) if selected_zone else VegetationDensity.objects.all()
+    roads_qs  = RoadSegment.objects.filter(zone=selected_zone) if selected_zone \
+                else RoadSegment.objects.all()
+    floods_qs = FloodRisk.objects.filter(zone=selected_zone) if selected_zone \
+                else FloodRisk.objects.all()
+    veg_qs    = VegetationDensity.objects.filter(zone=selected_zone) if selected_zone \
+                else VegetationDensity.objects.all()
 
     return JsonResponse({
         "routes": [
@@ -246,27 +286,44 @@ def api_mark_alert_read(request, alert_id):
 
 @require_GET
 def api_alerts_export(request):
+    """
+    Export des alertes actives en CSV.
+    Paramètres GET :
+      - zone : code zone (optionnel)
+      - fmt  : format (csv uniquement pour l'instant)
+    """
     zone_code = request.GET.get("zone", "")
     qs = Alert.objects.filter(is_read=False).order_by("-created_at")
     if zone_code:
         qs = qs.filter(zone__code=zone_code)
 
     filename = f"alertes_{zone_code or 'toutes'}_{timezone.now().strftime('%Y%m%d_%H%M')}.csv"
+
     response = HttpResponse(content_type="text/csv; charset=utf-8")
     response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    # BOM UTF-8 pour Excel
     response.write("\ufeff")
 
     writer = csv.writer(response, delimiter=";")
-    writer.writerow(["ID", "Titre", "Message", "Severite", "Categorie", "Zone", "Latitude", "Longitude", "Date creation"])
+    writer.writerow([
+        "ID", "Titre", "Message", "Severite", "Categorie",
+        "Zone", "Latitude", "Longitude", "Date creation"
+    ])
 
     for a in qs:
         writer.writerow([
-            a.id, a.title, a.message,
-            a.get_severity_display(), a.get_category_display(),
+            a.id,
+            a.title,
+            a.message,
+            a.get_severity_display(),
+            a.get_category_display(),
             a.zone.name if a.zone else "",
-            _js_num(a.lat), _js_num(a.lng),
+            _js_num(a.lat),
+            _js_num(a.lng),
             a.created_at.strftime("%d/%m/%Y %H:%M"),
         ])
+
+    logger.info("Export CSV alertes — %d lignes (zone: %s)", qs.count(), zone_code or "toutes")
     return response
 
 
@@ -274,9 +331,17 @@ def api_alerts_export(request):
 
 @require_GET
 def api_roads_export(request):
+    """
+    Export des segments routiers en GeoJSON FeatureCollection.
+    Paramètres GET :
+      - zone : code zone (optionnel)
+      - fmt  : format (geojson uniquement pour l'instant)
+    """
     zone_code     = request.GET.get("zone", "")
     selected_zone = Zone.objects.filter(code=zone_code).first() if zone_code else None
-    qs = RoadSegment.objects.filter(zone=selected_zone) if selected_zone else RoadSegment.objects.all()
+
+    qs = RoadSegment.objects.filter(zone=selected_zone) if selected_zone \
+         else RoadSegment.objects.all()
 
     features = []
     for r in qs:
@@ -287,17 +352,24 @@ def api_roads_export(request):
             "type": "Feature",
             "geometry": geo,
             "properties": {
-                "id": r.id, "name": r.name, "status": r.status,
-                "condition_score": r.condition_score, "surface_type": r.surface_type,
-                "zone": r.zone.name if r.zone else "",
-                "zone_code": r.zone.code if r.zone else "",
+                "id":              r.id,
+                "name":            r.name,
+                "status":          r.status,
+                "status_label":    r.get_status_display(),
+                "condition_score": r.condition_score,
+                "surface_type":    r.surface_type,
+                "notes":           r.notes,
+                "zone":            r.zone.name if r.zone else "",
+                "zone_code":       r.zone.code if r.zone else "",
+                "last_analyzed":   r.last_analyzed.isoformat() if r.last_analyzed else "",
             },
         })
 
     geojson_data = {
-        "type": "FeatureCollection",
+        "type":      "FeatureCollection",
+        "name":      f"routes_{zone_code or 'toutes'}",
         "generated": timezone.now().isoformat(),
-        "features": features,
+        "features":  features,
     }
 
     filename = f"routes_{zone_code or 'toutes'}_{timezone.now().strftime('%Y%m%d_%H%M')}.geojson"
@@ -306,6 +378,8 @@ def api_roads_export(request):
         content_type="application/geo+json; charset=utf-8",
     )
     response["Content-Disposition"] = f'attachment; filename="{filename}"'
+
+    logger.info("Export GeoJSON routes — %d features (zone: %s)", len(features), zone_code or "toutes")
     return response
 
 
@@ -332,6 +406,17 @@ from .gee_integration import get_ndvi_stats, get_flood_extent, get_road_surface_
 
 @require_GET
 def api_gee_ndvi(request):
+    """
+    Retourne les statistiques NDVI et l'URL de tuiles Leaflet pour une zone.
+
+    GET /api/gee/ndvi/?zone=<code>
+
+    Réponses :
+        200 + données JSON        → succès
+        200 + {"error": "..."}    → GEE disponible mais pas de données
+        400                       → paramètre zone manquant ou invalide
+        500                       → erreur GEE inattendue
+    """
     zone_code = request.GET.get("zone", "").strip()
     if not zone_code:
         return JsonResponse({"error": "Paramètre 'zone' requis."}, status=400)
@@ -342,11 +427,16 @@ def api_gee_ndvi(request):
     try:
         data = get_ndvi_stats(bbox)
     except Exception as exc:
-        logger.error("[GEE NDVI] Erreur zone %s : %s", zone_code, exc)
+        logger.error("[GEE NDVI] Erreur inattendue pour zone %s : %s", zone_code, exc)
         return JsonResponse({"error": f"Erreur GEE : {str(exc)}"}, status=500)
 
     if data is None:
-        return JsonResponse({"error": "Aucune image disponible.", "no_data": True, "zone": zone_code, "tiles_url": None})
+        return JsonResponse({
+            "error":     "Aucune image Sentinel-2 disponible pour cette zone.",
+            "no_data":   True,
+            "zone":      zone_code,
+            "tiles_url": None,
+        }, status=200)
 
     data["zone"] = zone_code
     return JsonResponse(data)
@@ -354,6 +444,13 @@ def api_gee_ndvi(request):
 
 @require_GET
 def api_gee_flood(request):
+    """
+    Retourne la détection d'inondation SAR et l'URL de tuiles Leaflet pour une zone.
+
+    GET /api/gee/flood/?zone=<code>
+
+    Réponses identiques à api_gee_ndvi.
+    """
     zone_code = request.GET.get("zone", "").strip()
     if not zone_code:
         return JsonResponse({"error": "Paramètre 'zone' requis."}, status=400)
@@ -364,11 +461,16 @@ def api_gee_flood(request):
     try:
         data = get_flood_extent(bbox)
     except Exception as exc:
-        logger.error("[GEE Flood] Erreur zone %s : %s", zone_code, exc)
+        logger.error("[GEE Flood] Erreur inattendue pour zone %s : %s", zone_code, exc)
         return JsonResponse({"error": f"Erreur GEE : {str(exc)}"}, status=500)
 
     if data is None:
-        return JsonResponse({"error": "Données SAR insuffisantes.", "no_data": True, "zone": zone_code, "tiles_url": None})
+        return JsonResponse({
+            "error":     "Données SAR Sentinel-1 insuffisantes pour cette zone.",
+            "no_data":   True,
+            "zone":      zone_code,
+            "tiles_url": None,
+        }, status=200)
 
     data["zone"] = zone_code
     return JsonResponse(data)
@@ -376,6 +478,11 @@ def api_gee_flood(request):
 
 @require_GET
 def api_gee_road(request):
+    """
+    Retourne l'indice de qualité de surface routière via NDWI (expérimental).
+
+    GET /api/gee/road/?zone=<code>
+    """
     zone_code = request.GET.get("zone", "").strip()
     if not zone_code:
         return JsonResponse({"error": "Paramètre 'zone' requis."}, status=400)
@@ -386,11 +493,15 @@ def api_gee_road(request):
     try:
         data = get_road_surface_index(bbox)
     except Exception as exc:
-        logger.error("[GEE Road] Erreur zone %s : %s", zone_code, exc)
+        logger.error("[GEE Road] Erreur inattendue pour zone %s : %s", zone_code, exc)
         return JsonResponse({"error": f"Erreur GEE : {str(exc)}"}, status=500)
 
     if data is None:
-        return JsonResponse({"error": "Données Landsat insuffisantes.", "no_data": True, "zone": zone_code})
+        return JsonResponse({
+            "error":   "Données Landsat insuffisantes pour cette zone.",
+            "no_data": True,
+            "zone":    zone_code,
+        }, status=200)
 
     data["zone"] = zone_code
     return JsonResponse(data)

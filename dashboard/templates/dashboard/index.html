@@ -343,10 +343,9 @@
 <div id="toasts" aria-live="polite" aria-atomic="false"></div>
 
 <!-- Données Django → JS -->
-{{ map_data_json|default:"{}"|json_script:"gd-map-data" }}
-{{ chart_routes_json|default:"{}"|json_script:"gd-chart-routes" }}
-{{ chart_floods_json|default:"{}"|json_script:"gd-chart-floods" }}
-{{ avg_score_json|json_script:"gd-avg-score" }}
+{{ map_data_json|json_script:"gd-map-data" }}
+{{ chart_routes_json|json_script:"gd-chart-routes" }}
+{{ chart_floods_json|json_script:"gd-chart-floods" }}
 {{ center_lat_json|json_script:"gd-center-lat" }}
 {{ center_lng_json|json_script:"gd-center-lng" }}
 
