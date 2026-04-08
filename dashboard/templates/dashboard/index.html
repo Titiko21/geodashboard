@@ -370,7 +370,7 @@
         initEventListeners();
         initMap(CENTER_LAT, CENTER_LNG, MAP_DATA);
         initCharts(CHART_ROUTES, CHART_FLOODS, AVG_SCORE);
-        setInterval(refreshAlerts, 60000);
+        _alertInterval = setInterval(refreshAlerts, 60000);
         initSettings();
     });
 </script>

@@ -30,6 +30,8 @@ let _allBounds = [];
 let _initLat = 5.35;
 let _initLng = -4.00;
 let _mapReady = false;
+let _alertFailCount = 0;
+let _alertInterval = null;
 
 /* Zone courante — lue depuis l'URL au démarrage, utilisée partout */
 var _activeZoneCode = (new URLSearchParams(window.location.search)).get('zone') || '';
@@ -1021,8 +1023,9 @@ function flyToAll() {
 
 function refreshGeeLayer(zoneCode) {
   if (!map || !_mapReady) return;
+  if (!zoneCode) { console.debug('[GEE] Pas de zone sélectionnée — skip'); return; }
 
-  var base = zoneCode ? '?zone=' + encodeURIComponent(zoneCode) : '';
+  var base = '?zone=' + encodeURIComponent(zoneCode);
 
   fetch('/api/gee/ndvi/' + base)
     .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
@@ -1189,19 +1192,18 @@ let _fetchAlertsCtrl = null;
 
 /**
  * Rafraîchit le compteur d'alertes depuis l'API.
- * CORRECTION : passe le code de zone dans la requête pour un comptage filtré.
  */
 function refreshAlerts() {
   if (_fetchAlertsCtrl) _fetchAlertsCtrl.abort();
   _fetchAlertsCtrl = new AbortController();
 
-  /* Filtrage par zone — clé de la correction du comptage */
   var suffix = _activeZoneCode ? '?zone=' + encodeURIComponent(_activeZoneCode) : '';
 
   fetch('/api/alerts/' + suffix, { signal: _fetchAlertsCtrl.signal })
     .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
     .then(function (d) {
       _fetchAlertsCtrl = null;
+      _alertFailCount = 0;
       var count = d.count || 0;
 
       var cnt = document.getElementById('alertCount');
@@ -1224,7 +1226,13 @@ function refreshAlerts() {
     })
     .catch(function (err) {
       if (err && err.name === 'AbortError') return;
-      console.warn('[GéoDash] refreshAlerts:', err);
+      _alertFailCount = (_alertFailCount || 0) + 1;
+      console.warn('[GéoDash] refreshAlerts (' + _alertFailCount + '/5):', err);
+      if (_alertFailCount >= 5 && _alertInterval) {
+        clearInterval(_alertInterval);
+        _alertInterval = null;
+        console.warn('[GéoDash] Alertes désactivées après 5 échecs consécutifs');
+      }
     });
 }
 
