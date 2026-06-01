@@ -4,41 +4,70 @@ Interface de décision pour visualiser l'état des routes, les risques d'inondat
 et la densité de végétation en temps réel sur une carte interactive.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- DÉMARRAGE RAPIDE (Windows)
+ DÉMARRAGE RAPIDE (Docker dev local — Windows / Linux / macOS)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Option A — Double-cliquer sur  demarrer.bat  (tout automatique)
+Pré-requis : Docker Desktop installé.
 
-Option B — Terminal manuel :
+    1. Copier .env.example en .env et renseigner les variables.
+    2. docker compose up -d
+    3. Ouvrir http://localhost:8000
 
-    pip install -r requirements.txt
-    python manage.py migrate
-    python manage.py populate_sample_data
-    python manage.py runserver
+La première fois, l'entrypoint importe `geodash_dump.sql` si la base est
+vide (170 zones, ~32k segments, ~3.7k inondations, ~3.7k végétation).
 
-Puis ouvrir :  http://127.0.0.1:8000/
+Commandes utiles :
+
+    # Logs en direct
+    docker compose logs -f web
+
+    # Console Django dans le conteneur
+    docker compose exec web python manage.py shell
+
+    # Activer le scheduler (refresh OSM hebdo + GEE quotidien)
+    docker compose --profile scheduler up -d
+
+    # Rafraîchir les scores satellite à la demande
+    docker compose exec web python manage.py update_gee_scores
+
+    # Réimporter OSM pour une ville
+    docker compose exec web python manage.py populate_geodata --zone TAB
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  STRUCTURE DU PROJET
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 geodashboard/
-├── demarrer.bat                         ← Script de démarrage Windows
 ├── manage.py                            ← Point d'entrée Django
-├── requirements.txt                     ← Dépendances (Django uniquement)
+├── requirements.txt                     ← Dépendances Python (Django, PostGIS, GEE, APScheduler...)
+├── docker-compose.yml                   ← Stack : db (postgis), web, scheduler (opt-in), keycloak (opt-in)
+├── docker-compose.override.yml          ← Override dev : bind mount + runserver
+├── Dockerfile                           ← Image web (Django + GDAL/GEOS/PROJ)
+├── entrypoint.sh                        ← Bootstrap conteneur (migrate + import dump si vide)
+├── geodash_dump.sql                     ← Dump initial (importé une fois si la DB est vide)
+├── docker/
+│   ├── postgres-init/                   ← Scripts d'init DB (PostGIS + DB Keycloak)
+│   └── keycloak/                        ← Import realm Keycloak
 │
 ├── config/
-│   ├── settings.py                      ← Configuration Django
-│   └── urls.py                          ← Routes principales
+│   ├── settings.py                      ← Configuration Django (GIS, GEE, Keycloak, logging)
+│   └── urls.py                          ← Routes racine
 │
 └── dashboard/
-    ├── models.py                        ← Modèles (Zone, Route, Inondation, Végétation, Alerte)
-    ├── views.py                         ← Vues + API REST
-    ├── urls.py                          ← Routes de l'application
+    ├── models.py                        ← Zone, RoadSegment, FloodRisk, VegetationDensity, Alert
+    ├── views.py                         ← Vue dashboard + API REST
+    ├── urls.py                          ← Routes API
     ├── admin.py                         ← Interface d'administration
-    ├── templates/dashboard/index.html  ← Interface principale
+    ├── auth.py / middleware.py          ← Auth OIDC Keycloak (optionnel)
+    ├── health.py                        ← Health check Docker (/health/)
+    ├── gee_integration.py               ← Google Earth Engine (Sentinel-1/2, Landsat)
+    ├── traffic_estimator.py             ← Estimation trafic (OSM + VIIRS)
+    ├── templates/dashboard/index.html   ← Interface principale
     └── management/commands/
-        └── populate_sample_data.py     ← Données de démonstration
+        ├── populate_geodata.py          ← Import OSM via Overpass
+        ├── update_gee_scores.py         ← Calcul scores satellite par segment
+        ├── check_missing.py             ← Diagnostic zones sans données
+        └── run_scheduler.py             ← Scheduler APScheduler (jobs hebdo/quotidiens)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  FONCTIONNALITÉS
@@ -116,3 +145,56 @@ Créer un compte admin :
 
 Accéder à l'admin : http://127.0.0.1:8000/admin/
 → Gérer zones, routes, inondations, végétation et alertes via l'interface web
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ AUTHENTIFICATION SSO — KEYCLOAK (OIDC)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Le SSO Keycloak est OPTIONNEL et désactivé par défaut.
+Pour l'activer : KEYCLOAK_ENABLED=true dans .env
+(sans cette variable, le projet fonctionne comme avant — utile en dev offline).
+
+Variables .env requises quand KEYCLOAK_ENABLED=true :
+
+    KEYCLOAK_ENABLED=true
+    KEYCLOAK_URL=http://keycloak:8080            # interne Docker (Django → KC)
+    KEYCLOAK_PUBLIC_URL=http://localhost:8080    # browser-facing (KC → user)
+    KEYCLOAK_REALM=geodash
+    OIDC_RP_CLIENT_ID=geodash-web
+    OIDC_RP_CLIENT_SECRET=<client-secret>
+    KEYCLOAK_ADMIN=admin
+    KEYCLOAK_ADMIN_PASSWORD=<mot-de-passe-fort>
+
+Démarrage avec SSO :
+
+    docker compose --profile sso up -d
+    # Sans le profil sso, Keycloak n'est pas démarré → KEYCLOAK_ENABLED doit
+    # alors pointer vers une instance externe.
+
+Configuration initiale du realm Keycloak (à faire UNE fois via la console
+http://localhost:8080) :
+
+  1. Créer un realm "geodash"
+  2. Créer un client "geodash-web" :
+       - Client type    : OpenID Connect
+       - Client auth    : ON  (confidential)
+       - Standard flow  : ON
+       - Valid redirect URIs : http://localhost:8000/oidc/callback/
+                               https://geodash.exemple.com/oidc/callback/
+       - Valid post logout : http://localhost:8000/  + URL prod
+       - Web origins    : +
+       Récupérer le secret dans l'onglet "Credentials" → OIDC_RP_CLIENT_SECRET
+  3. Créer 2 rôles realm : geodash-staff, geodash-admin
+  4. Créer un utilisateur de test, lui assigner geodash-admin, définir un
+     mot de passe (onglet Credentials).
+
+Routes ajoutées par mozilla-django-oidc :
+    /oidc/authenticate/  → redirige vers Keycloak (= "page de login")
+    /oidc/callback/      → reçoit le code, crée la session
+    /oidc/logout/        → déconnecte Django + Keycloak (single-logout)
+
+Compatibilité :
+  • Le superuser local Django reste fonctionnel pour /admin/
+    (ModelBackend conservé en second backend).
+  • Les API JSON renvoient 401 au lieu de rediriger (cf. middleware).
+  • L'endpoint /health/ reste public pour le healthcheck Docker.

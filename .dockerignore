@@ -1,35 +1,6 @@
-# Python/Django
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.sqlite3
-*.log
- *.node_modules/
-# Environnements virtuels
-.venv/
-venv/
-
-# Fichiers secrets
+﻿gee_credentials.json
 .env
-
-# IDEs / éditeurs
-.idea/
-.vscode/
-
-# Git
+*.pyc
+__pycache__/
 .git/
-
-# Docker
-*.dockerfile
-docker-compose.override.yml
-docker-compose.prod.yml
-**/Dockerfile.*
-**/docker-compose.override.yml
-**/docker-compose.prod.yml
-
-# Volumes et données persistantes
-postgres_data/
-*.tar
-*.img
-*.log
+node_modules/

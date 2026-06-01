@@ -84,14 +84,19 @@ let _tileLayer = null;
 
 function toggleTheme() {
   var html = document.documentElement;
+  var body = document.body;
   var current = html.getAttribute('data-theme') || 'light';
   var next = current === 'light' ? 'dark' : 'light';
 
   html.classList.add('theme-transitioning');
   html.setAttribute('data-theme', next);
+  // Le nouveau design utilise `body.dark` (vs ancien `html[data-theme]`).
+  // On set les deux pour rétrocompatibilité avec le CSS conservé.
+  body.classList.toggle('dark', next === 'dark');
 
   try {
     localStorage.setItem('gd-theme', next);
+    document.cookie = 'gd_theme=' + next + ';path=/;max-age=' + (60 * 60 * 24 * 365);
     if (_settings) {
       _settings.theme = next;
       _saveSettings();
@@ -138,24 +143,29 @@ function initEventListeners() {
     card.addEventListener('click', function () { setLayer(this.dataset.layer); });
   });
 
-  document.querySelectorAll('[data-toggle-layer]').forEach(function (label) {
-    label.addEventListener('click', function (e) {
+  // Toggle de couches (panneau gauche, onglet "Couches" — design Claude)
+  // Supporte les 2 variantes : ancien (checkbox interne) et nouveau (.switch)
+  document.querySelectorAll('[data-toggle-layer]').forEach(function (row) {
+    row.addEventListener('click', function (e) {
       e.preventDefault();
       var type = this.dataset.toggleLayer;
       var cb = this.querySelector('input[type="checkbox"]');
       if (cb) cb.checked = !cb.checked;
+      var sw = this.querySelector('.switch');
+      if (sw) sw.classList.toggle('on');
       toggleLayer(type, this);
     });
   });
 
-  var alertsScroll = document.querySelector('.alerts-scroll');
-  if (alertsScroll) {
-    alertsScroll.addEventListener('click', function (e) {
+  // Liste d'alertes (nouveau design : .alerts-list > .alert-card)
+  // Ancienne compat : .alerts-scroll > .a-item
+  var alertsContainer = document.querySelector('.alerts-list, .alerts-scroll');
+  if (alertsContainer) {
+    alertsContainer.addEventListener('click', function (e) {
       var item = e.target.closest('[data-focus-alert]');
       if (!item) return;
-      document.querySelectorAll('.a-item.focused').forEach(function (x) {
-        x.classList.remove('focused');
-      });
+      document.querySelectorAll('.alert-card.focused, .a-item.focused')
+        .forEach(function (x) { x.classList.remove('focused'); });
       item.classList.add('focused');
       focusAlert(
         parseFloat(item.dataset.lat || 0),
@@ -167,10 +177,82 @@ function initEventListeners() {
     });
   }
 
+  // Basemap switcher (boutons .tool[data-basemap] dans la topbar carte)
+  document.querySelectorAll('.tool[data-basemap]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('.tool[data-basemap]').forEach(function (b) {
+        b.classList.remove('active');
+      });
+      this.classList.add('active');
+      var bm = this.dataset.basemap;
+      if (typeof _switchBasemap === 'function') _switchBasemap(bm);
+    });
+  });
+
+  // Chips overlays cumulables (NDVI / SAR / Limites admin)
+  document.querySelectorAll('[data-toggle-overlay]').forEach(function (chip) {
+    chip.addEventListener('click', function () {
+      toggleOverlay(this.dataset.toggleOverlay, this);
+    });
+  });
+
+  // Ouverture du drawer settings depuis le rail / topbar
+  document.querySelectorAll('[data-open-settings]').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      var backdrop = document.getElementById('settingsBackdrop');
+      var drawer = document.getElementById('settingsDrawer');
+      if (backdrop) backdrop.classList.add('open');
+      if (drawer) drawer.classList.add('open');
+    });
+  });
+
+  // Plein écran carte (rail + map-tools)
+  document.querySelectorAll('[data-toggle-fullscreen]').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      toggleMapFullscreen();
+    });
+  });
+
+  // Raccourci clavier F → plein écran
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'F' || e.key === 'f') {
+      // Ne pas déclencher dans les champs de saisie
+      if (e.target.matches('input,textarea,select')) return;
+      toggleMapFullscreen();
+    }
+    // Échap → quitter plein écran
+    if (e.key === 'Escape') {
+      var app = document.querySelector('.app');
+      if (app && app.classList.contains('map-fullscreen')) {
+        app.classList.remove('map-fullscreen');
+        setTimeout(function () { if (typeof map !== 'undefined' && map) map.invalidateSize(); }, 220);
+      }
+    }
+  });
+
+  // Bouton "Alertes" topbar / rail → switch sur l'onglet Alertes du panneau droit
+  document.querySelectorAll('[data-scroll-to-alerts], .rail-item[data-rail-target="alerts"]')
+    .forEach(function (btn) {
+      btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        var alertsTab = document.querySelector('[data-rp-tab="alerts"]');
+        if (alertsTab) alertsTab.click();
+      });
+    });
+
   var zoneSelect = document.getElementById('zoneSelect');
   if (zoneSelect) {
     zoneSelect.addEventListener('change', function () {
       switchZone(this.value);
+    });
+  }
+
+  var adminSelect = document.getElementById('adminSelect');
+  if (adminSelect) {
+    adminSelect.addEventListener('change', function () {
+      switchAdmin(this.value);
     });
   }
 
@@ -194,7 +276,7 @@ function initEventListeners() {
    CARTE — initialisation Leaflet
 ══════════════════════════════════════════════════════════ */
 
-function initMap(lat, lng, data) {
+function initMap(lat, lng) {
   if (typeof L === 'undefined') {
     console.error('[GéoDash] Leaflet non disponible.');
     var el = document.getElementById('map');
@@ -233,6 +315,9 @@ function initMap(lat, lng, data) {
   map.setView([_initLat, _initLng], 9);
   _mapReady = true;
 
+  // Coordonnées + zoom (bas-droite carte) — branché ici car nécessite `map`
+  _bindMapCoords();
+
   window.addEventListener('resize', function () {
     clearTimeout(window._gdResizeTimer);
     window._gdResizeTimer = setTimeout(function () {
@@ -240,14 +325,57 @@ function initMap(lat, lng, data) {
     }, 150);
   });
 
-  _renderData(data);
-  updateLegend('all');
+  /* Chargement async des géométries (remplace l'injection inline ancien
+     map_data_json — peut peser plusieurs Mo selon la zone). */
+  _loadMapData(_activeZoneCode);
 
-  /* GEE — chargement des couches satellite 2s après l'init */
-  setTimeout(function () { refreshGeeLayer(_activeZoneCode); }, 2000);
-  setInterval(function () { refreshGeeLayer(_activeZoneCode); }, 3600 * 1000);
+  /* Markers communes (cliquables, popup détaillé) */
+  loadZoneMarkers();
 
-  setTimeout(_hideOverlay, 900);
+  /* GEE — overlays NDVI/SAR : opt-in via chips (toggleOverlay).
+     Pas de chargement automatique pour ne pas saturer la carte au boot
+     et économiser des appels GEE quand l'utilisateur n'en a pas besoin.
+     Toujours rafraîchi toutes les heures SI l'utilisateur l'a activé. */
+  setInterval(_refreshActiveOverlays, 3600 * 1000);
+}
+
+
+/* Rafraîchit uniquement les overlays GEE actuellement visibles. */
+function _refreshActiveOverlays() {
+  if (map && lGeeNdvi && map.hasLayer(lGeeNdvi))  _loadNdviOverlay();
+  if (map && lGeeFlood && map.hasLayer(lGeeFlood)) _loadSarOverlay();
+}
+
+
+/* Charge les géométries depuis /api/map-data/ et les passe au rendu Leaflet.
+   Appelé au boot et à chaque changement de zone. */
+function _loadMapData(zoneCode) {
+  var url = '/api/map-data/' + (zoneCode ? '?zone=' + encodeURIComponent(zoneCode) : '');
+  return fetch(url, {
+    headers:     _apiHeaders(),
+    redirect:    'manual',
+    credentials: 'same-origin',
+  })
+    .then(function (resp) {
+      if (resp.type === 'opaqueredirect' || resp.status === 401 || resp.status === 403) {
+        return Promise.reject('session');
+      }
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.json();
+    })
+    .then(function (data) {
+      _renderData(data);
+      updateLegend('all');
+      _hideOverlay();
+    })
+    .catch(function (err) {
+      if (err === 'session') {
+        _stopAlertPolling('session');  // déclenche le toast + bouton reconnexion
+      } else {
+        console.error('[GéoDash] Échec chargement /api/map-data/ :', err);
+      }
+      _hideOverlay();
+    });
 }
 
 function _addResetControl() {
@@ -1021,56 +1149,173 @@ function flyToAll() {
    GOOGLE EARTH ENGINE
 ══════════════════════════════════════════════════════════ */
 
-function refreshGeeLayer(zoneCode) {
-  if (!map || !_mapReady) return;
-  if (!zoneCode) { console.debug('[GEE] Pas de zone sélectionnée — skip'); return; }
+/* Headers à envoyer sur tous les fetchs API JSON.
+   - `Accept: application/json` ET `X-Requested-With: XMLHttpRequest` font que
+     LoginRequiredMiddleware (dashboard/middleware.py) répond 401 JSON au lieu
+     de rediriger 302 vers Keycloak. Sans ces headers, le 302 est interprété
+     comme `opaqueredirect` côté JS et déclenche un faux positif "session
+     expirée" même quand la session est encore valide. */
+function _apiHeaders(extra) {
+  var h = {
+    'Accept':           'application/json',
+    'X-Requested-With': 'XMLHttpRequest',
+  };
+  if (extra) Object.keys(extra).forEach(function (k) { h[k] = extra[k]; });
+  return h;
+}
 
-  var base = '?zone=' + encodeURIComponent(zoneCode);
+function _authFetchJSON(url) {
+  return fetch(url, {
+    headers:     _apiHeaders(),
+    redirect:    'manual',
+    credentials: 'same-origin',
+  })
+    .then(function (r) {
+      if (r.type === 'opaqueredirect' || r.status === 401 || r.status === 403) {
+        return Promise.reject('session');
+      }
+      if (!r.ok) return Promise.reject(r.status);
+      return r.json();
+    });
+}
 
-  fetch('/api/gee/ndvi/' + base)
-    .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+/* Construit la query string GEE depuis les params URL courants
+   (admin / zone), pour que les overlays soient clippés sur la vraie
+   géométrie active. */
+function _geeQueryString() {
+  var url = new URL(window.location.href);
+  var admin = url.searchParams.get('admin');
+  var zone  = url.searchParams.get('zone');
+  var qs = new URLSearchParams();
+  if (admin) qs.set('admin', admin);
+  if (zone)  qs.set('zone',  zone);
+  return qs.toString() ? ('?' + qs.toString()) : '';
+}
+
+
+function _loadNdviOverlay() {
+  if (!map || !_mapReady) return Promise.resolve();
+  return _authFetchJSON('/api/gee/ndvi/' + _geeQueryString())
     .then(function (data) {
-      if (!data || data.error) { console.warn('[GEE NDVI]', data && data.error); return; }
+      if (!data || data.error || !data.tiles_url) {
+        toast(data && data.error ? data.error : 'NDVI indisponible', 'err');
+        return;
+      }
       if (lGeeNdvi) { map.removeLayer(lGeeNdvi); lGeeNdvi = null; }
-
       lGeeNdvi = L.tileLayer(data.tiles_url, {
-        opacity: 0.55, maxNativeZoom: 18, maxZoom: 22, attribution: 'NDVI · Sentinel-2 · GEE',
+        opacity: 0.55, maxNativeZoom: 18, maxZoom: 22,
+        attribution: 'NDVI · Sentinel-2 · GEE',
       });
       lGeeNdvi.addTo(map);
-
-      var ndviVal = parseFloat(data.mean_ndvi || 0);
-      var ndviEl = document.getElementById('kpiNdvi')
-        || document.querySelector('.kpi-card[data-layer="vegetation"] .kpi-value');
-      if (ndviEl) {
-        ndviEl.textContent = ndviVal.toFixed(3);
-        ndviEl.className = ndviEl.className.replace(/\b(good|warn|danger)\b/g, '');
-        ndviEl.classList.add(ndviVal > 0.4 ? 'good' : ndviVal > 0.2 ? 'warn' : 'danger');
-      }
-      var ndviSub = document.querySelector('.kpi-card[data-layer="vegetation"] .kpi-sub');
-      if (ndviSub && data.coverage_percent !== undefined) {
-        ndviSub.textContent = data.coverage_percent + '% couverture · satellite';
-      }
-
-      toast('Couche NDVI chargée (' + (data.image_date || '') + ')', 'ok');
-      updateLegend(_activeLayer);
+      toast('Couche NDVI affichée' + (data.image_date ? ' (' + data.image_date + ')' : ''), 'ok');
     })
-    .catch(function (err) { console.warn('[GEE NDVI] Erreur:', err); });
+    .catch(function (err) {
+      if (err === 'session') return;
+      console.warn('[GEE NDVI] Erreur :', err);
+      toast('NDVI indisponible', 'err');
+    });
+}
 
-  fetch('/api/gee/flood/' + base)
-    .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+
+function _loadSarOverlay() {
+  if (!map || !_mapReady) return Promise.resolve();
+  return _authFetchJSON('/api/gee/flood/' + _geeQueryString())
     .then(function (data) {
-      if (!data || data.error) { console.warn('[GEE Flood]', data && data.error); return; }
+      if (!data || data.error || !data.tiles_url) {
+        toast(data && data.error ? data.error : 'SAR indisponible', 'err');
+        return;
+      }
       if (lGeeFlood) { map.removeLayer(lGeeFlood); lGeeFlood = null; }
-
       lGeeFlood = L.tileLayer(data.tiles_url, {
-        opacity: 0.65, maxNativeZoom: 18, maxZoom: 22, attribution: 'SAR · Sentinel-1 · GEE',
+        opacity: 0.65, maxNativeZoom: 18, maxZoom: 22,
+        attribution: 'SAR · Sentinel-1 · GEE',
       });
       lGeeFlood.addTo(map);
-
-      toast('Couche SAR chargée — risque ' + (data.risk_level || ''), 'ok');
-      updateLegend(_activeLayer);
+      toast('Couche SAR affichée — risque ' + (data.risk_level || 'n/a'), 'ok');
     })
-    .catch(function (err) { console.warn('[GEE Flood] Erreur:', err); });
+    .catch(function (err) {
+      if (err === 'session') return;
+      console.warn('[GEE Flood] Erreur :', err);
+      toast('SAR indisponible', 'err');
+    });
+}
+
+
+/* Couche frontières administratives (districts + régions) — Polygons clippés
+   par /api/admin/divisions/. Toggle on/off via chip. */
+let lAdminBoundaries = null;
+
+function _loadAdminBoundariesOverlay() {
+  if (!map || !_mapReady) return Promise.resolve();
+  return fetch('/api/admin/divisions/?level=district', {
+    headers: _apiHeaders(), credentials: 'same-origin', redirect: 'manual',
+  })
+    .then(function (r) {
+      if (r.type === 'opaqueredirect' || r.status === 401 || r.status === 403) {
+        return Promise.reject('session');
+      }
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function (data) {
+      if (!data || !data.features) return;
+      if (lAdminBoundaries) { map.removeLayer(lAdminBoundaries); lAdminBoundaries = null; }
+      lAdminBoundaries = L.geoJSON(data, {
+        style: function (feature) {
+          var auto = feature.properties.is_autonomous;
+          return {
+            color:       auto ? '#FFD700' : '#94A3B8',
+            weight:      auto ? 2.5 : 1.5,
+            opacity:     0.75,
+            fillOpacity: 0.03,
+            dashArray:   auto ? null : '4,3',
+          };
+        },
+        onEachFeature: function (feature, layer) {
+          var p = feature.properties;
+          layer.bindTooltip(p.is_autonomous ? p.name + ' (autonome)' : p.name,
+            { sticky: true, direction: 'center' });
+        },
+      }).addTo(map);
+    })
+    .catch(function (err) {
+      if (err === 'session') return;
+      console.warn('[Admin boundaries] échec :', err);
+    });
+}
+
+
+/* Toggle d'un overlay GEE/admin. Charge à la 1ʳᵉ activation, puis
+   show/hide sans re-fetch tant que la session est ouverte. */
+function toggleOverlay(name, chip) {
+  if (chip) chip.classList.toggle('on');
+  var isOn = chip ? chip.classList.contains('on') : true;
+
+  if (name === 'ndvi') {
+    if (!isOn && lGeeNdvi) { map.removeLayer(lGeeNdvi); return; }
+    if (isOn && lGeeNdvi)  { lGeeNdvi.addTo(map); return; }
+    if (isOn) _loadNdviOverlay();
+    return;
+  }
+  if (name === 'sar') {
+    if (!isOn && lGeeFlood) { map.removeLayer(lGeeFlood); return; }
+    if (isOn && lGeeFlood)  { lGeeFlood.addTo(map); return; }
+    if (isOn) _loadSarOverlay();
+    return;
+  }
+  if (name === 'admin') {
+    if (!isOn && lAdminBoundaries) { map.removeLayer(lAdminBoundaries); return; }
+    if (isOn && lAdminBoundaries)  { lAdminBoundaries.addTo(map); return; }
+    if (isOn) _loadAdminBoundariesOverlay();
+    return;
+  }
+}
+
+
+/* Stub conservé pour rétrocompatibilité : ancien refreshGeeLayer().
+   Force le re-fetch des overlays NDVI/SAR si déjà actifs. */
+function refreshGeeLayer(_zoneCodeIgnored) {
+  _refreshActiveOverlays();
 }
 
 
@@ -1078,11 +1323,31 @@ function refreshGeeLayer(zoneCode) {
    NAVIGATION & ALERTES
 ══════════════════════════════════════════════════════════ */
 
+/* ══════════════════════════════════════════════════════════
+   FILTRES — reload complet (stable, prévisible)
+
+   Le SPA via innerHTML replacement a été tenté mais cassait les bindings
+   des KPIs/tabs/alertes (event listeners attachés au DOM remplacé). Un vrai
+   SPA demanderait un refactor systématique en event delegation. Pour
+   l'instant on reste sur le reload simple : la home pèse ~50 KB grâce au
+   découplage géométries → /api/map-data/, donc le reload est rapide (~300 ms)
+   et toutes les interactions restent fiables.
+   ══════════════════════════════════════════════════════════ */
+
 function switchZone(code) {
   var url = new URL(window.location.href);
-  if (code) {
-    url.searchParams.set('zone', code);
+  if (code) url.searchParams.set('zone', code);
+  else      url.searchParams.delete('zone');
+  window.location.href = url.toString();
+}
+
+function switchAdmin(value) {
+  var url = new URL(window.location.href);
+  if (value) {
+    url.searchParams.set('admin', value);
+    url.searchParams.delete('zone');
   } else {
+    url.searchParams.delete('admin');
     url.searchParams.delete('zone');
   }
   window.location.href = url.toString();
@@ -1193,14 +1458,67 @@ let _fetchAlertsCtrl = null;
 /**
  * Rafraîchit le compteur d'alertes depuis l'API.
  */
+/* Empêche les déclenchements en chaîne du toast "session expirée" : plusieurs
+   fetchs en vol peuvent rejeter 'session' en parallèle. On veut UN seul toast. */
+let _sessionExpiredShown = false;
+
+function _stopAlertPolling(reason) {
+  if (_alertInterval) {
+    clearInterval(_alertInterval);
+    _alertInterval = null;
+  }
+  if (reason === 'session') {
+    if (_sessionExpiredShown) return;
+    _sessionExpiredShown = true;
+    console.warn('[GéoDash] Session expirée — polling alertes arrêté.');
+    _showSessionExpiredToast();
+  } else {
+    console.warn('[GéoDash] Alertes désactivées après 5 échecs réseau consécutifs.');
+    toast('Alertes désactivées (5 échecs réseau consécutifs)', 'err');
+  }
+}
+
+/* Toast persistant avec bouton "Se reconnecter" qui ré-authentifie via OIDC
+   en conservant la page courante via next=<URL actuelle>. */
+function _showSessionExpiredToast() {
+  var wrap = document.getElementById('toasts');
+  if (!wrap) return;
+  var next = encodeURIComponent(window.location.pathname + window.location.search);
+  var t = document.createElement('div');
+  t.className = 'toast err';
+  t.style.cssText = 'display:flex;align-items:center;gap:12px;padding:10px 14px';
+  t.innerHTML =
+    '<span style="flex:1">Session expirée. Reconnecte-toi pour reprendre les alertes.</span>' +
+    '<a href="/oidc/authenticate/?next=' + next + '"'
+    + ' style="background:#fff;color:#111;padding:6px 10px;border-radius:6px;'
+    + 'text-decoration:none;font-weight:600;font-size:12px">Se reconnecter</a>';
+  wrap.appendChild(t);
+  // Pas de setTimeout → le toast reste jusqu'à action utilisateur.
+}
+
 function refreshAlerts() {
   if (_fetchAlertsCtrl) _fetchAlertsCtrl.abort();
   _fetchAlertsCtrl = new AbortController();
 
   var suffix = _activeZoneCode ? '?zone=' + encodeURIComponent(_activeZoneCode) : '';
 
-  fetch('/api/alerts/' + suffix, { signal: _fetchAlertsCtrl.signal })
-    .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+  // Les headers Accept/X-Requested-With (via _apiHeaders) garantissent une
+  // réponse 401 JSON propre du middleware en cas de session expirée, plutôt
+  // qu'un 302 vers OIDC qui se transformerait en opaqueredirect.
+  fetch('/api/alerts/' + suffix, {
+    signal:      _fetchAlertsCtrl.signal,
+    headers:     _apiHeaders(),
+    redirect:    'manual',
+    credentials: 'same-origin',
+  })
+    .then(function (r) {
+      if (r.type === 'opaqueredirect' || r.status === 401 || r.status === 403) {
+        _stopAlertPolling('session');
+        return Promise.reject('session');
+      }
+      if (!r.ok) return Promise.reject(r.status);
+      return r.json();
+    })
     .then(function (d) {
       _fetchAlertsCtrl = null;
       _alertFailCount = 0;
@@ -1226,13 +1544,10 @@ function refreshAlerts() {
     })
     .catch(function (err) {
       if (err && err.name === 'AbortError') return;
+      if (err === 'session') return; // déjà géré, ne pas incrémenter le compteur réseau
       _alertFailCount = (_alertFailCount || 0) + 1;
       console.warn('[GéoDash] refreshAlerts (' + _alertFailCount + '/5):', err);
-      if (_alertFailCount >= 5 && _alertInterval) {
-        clearInterval(_alertInterval);
-        _alertInterval = null;
-        console.warn('[GéoDash] Alertes désactivées après 5 échecs consécutifs');
-      }
+      if (_alertFailCount >= 5) _stopAlertPolling('network');
     });
 }
 
@@ -1772,4 +2087,389 @@ function initSettings() {
   });
 
   _updateExportLinks();
+}
+
+
+/* ══════════════════════════════════════════════════════════
+   TABS panneaux (left + right) — design Claude
+   ══════════════════════════════════════════════════════════ */
+
+function initPanelTabs() {
+  // Onglets du panneau GAUCHE : Zones / Couches / Données
+  document.querySelectorAll('[data-lp-tab]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var tab = this.dataset.lpTab;
+      document.querySelectorAll('[data-lp-tab]').forEach(function (b) { b.classList.remove('on'); });
+      this.classList.add('on');
+      document.querySelectorAll('[data-lp-content]').forEach(function (p) {
+        p.style.display = (p.dataset.lpContent === tab) ? '' : 'none';
+      });
+    });
+  });
+
+  // Onglets du panneau DROIT : Vue / Environnement / Alertes
+  document.querySelectorAll('[data-rp-tab]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var tab = this.dataset.rpTab;
+      document.querySelectorAll('[data-rp-tab]').forEach(function (b) { b.classList.remove('on'); });
+      this.classList.add('on');
+      document.querySelectorAll('[data-rp-content]').forEach(function (p) {
+        p.classList.toggle('on', p.dataset.rpContent === tab);
+      });
+    });
+  });
+
+  // Rail items (navigation visuelle pour l'instant — vraie nav en passe suivante)
+  document.querySelectorAll('.rail-item').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      if (this.classList.contains('ghost')) return;  // bouton réglages
+      document.querySelectorAll('.rail-item').forEach(function (b) { b.classList.remove('active'); });
+      this.classList.add('active');
+    });
+  });
+}
+
+
+/* ══════════════════════════════════════════════════════════
+   COUCHE COMMUNES — markers cliquables + popup riche
+   ══════════════════════════════════════════════════════════ */
+
+let lZoneMarkers = null;
+
+function loadZoneMarkers() {
+  if (!map || !_mapReady) return;
+
+  // Récupère les markers injectés en JSON par Django
+  var el = document.getElementById('gd-zones-markers');
+  if (!el) return;
+  var markers;
+  try { markers = JSON.parse(el.textContent); } catch (e) { return; }
+  if (!Array.isArray(markers) || markers.length === 0) return;
+
+  // Reset si une couche précédente existe (réimport par filtre admin)
+  if (lZoneMarkers) {
+    map.removeLayer(lZoneMarkers);
+    lZoneMarkers = null;
+  }
+
+  lZoneMarkers = L.layerGroup();
+  markers.forEach(function (z) {
+    if (z.lat == null || z.lng == null) return;
+
+    var marker = L.circleMarker([z.lat, z.lng], {
+      radius:      6,
+      fillColor:   '#FF7A2D',
+      fillOpacity: 0.85,
+      color:       '#fff',
+      weight:      2,
+      opacity:     1,
+      className:   'zone-marker',
+    });
+
+    // Tooltip au survol (nom)
+    marker.bindTooltip(z.name, { direction: 'top', offset: [0, -6], sticky: false });
+
+    // Popup au clic : contenu fetché à la demande pour ne pas surcharger
+    marker.on('click', function () {
+      _openCommunePopup(marker, z);
+    });
+
+    lZoneMarkers.addLayer(marker);
+  });
+  lZoneMarkers.addTo(map);
+}
+
+function _openCommunePopup(marker, zone) {
+  // Affichage immédiat d'un placeholder, puis on remplit avec les détails
+  var loadingHtml =
+    '<div class="commune-popup">'
+    + '<div class="cp-head"><span class="cp-dot"></span><span class="cp-name">'
+    + zone.name + '</span></div>'
+    + '<div class="cp-loading">Chargement des données…</div>'
+    + '</div>';
+
+  marker.bindPopup(loadingHtml, { maxWidth: 320, className: 'commune-popup-wrap' }).openPopup();
+
+  fetch('/api/zones/' + encodeURIComponent(zone.code) + '/stats/', {
+    headers:     _apiHeaders(),
+    credentials: 'same-origin',
+    redirect:    'manual',
+  })
+    .then(function (r) {
+      if (r.type === 'opaqueredirect' || r.status === 401 || r.status === 403) {
+        return Promise.reject('session');
+      }
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function (data) {
+      marker.setPopupContent(_renderCommunePopup(data));
+    })
+    .catch(function (err) {
+      if (err === 'session') return;
+      console.warn('[Popup commune] échec :', err);
+      marker.setPopupContent(
+        '<div class="commune-popup"><div class="cp-loading">Données indisponibles</div></div>'
+      );
+    });
+}
+
+function _renderCommunePopup(d) {
+  var roadColor = (d.roads.avg_score >= 70) ? 'var(--good)'
+                : (d.roads.avg_score >= 40) ? 'var(--warn)' : 'var(--danger)';
+  var floodColor = (d.floods.avg_score <= 30) ? 'var(--good)'
+                 : (d.floods.avg_score <= 60) ? 'var(--warn)' : 'var(--danger)';
+
+  var rows = [];
+
+  if (d.description) {
+    rows.push('<div class="cp-desc">' + d.description + '</div>');
+  }
+
+  rows.push(
+    '<div class="cp-row"><span>Routes</span>'
+    + '<span><b style="color:' + roadColor + '">' + d.roads.avg_score + '</b><span class="crit">/100</span>'
+    + (d.roads.critical ? ' <span class="crit">▼ ' + d.roads.critical + '</span>' : '')
+    + '</span></div>'
+  );
+
+  rows.push(
+    '<div class="cp-row"><span>Inondation</span>'
+    + '<span><b style="color:' + floodColor + '">' + d.floods.avg_score + '</b><span class="crit">/100</span>'
+    + (d.floods.critical ? ' <span class="crit">▼ ' + d.floods.critical + '</span>' : '')
+    + '</span></div>'
+  );
+
+  rows.push(
+    '<div class="cp-row"><span>NDVI moyen</span>'
+    + '<b style="color:var(--good)">' + d.vegetation.avg_ndvi.toFixed(3).replace('.', ',') + '</b></div>'
+  );
+
+  if (d.alerts_count > 0) {
+    rows.push(
+      '<div class="cp-row"><span>Alertes actives</span>'
+      + '<b style="color:var(--orange-1)">' + d.alerts_count + '</b></div>'
+    );
+  }
+
+  rows.push(
+    '<div class="cp-foot">'
+    + '<span>' + d.roads.total + ' route' + (d.roads.total > 1 ? 's' : '') + '</span>'
+    + '<span>' + d.vegetation.dense + '/' + d.vegetation.total + ' zones denses</span>'
+    + '</div>'
+  );
+
+  return ''
+    + '<div class="commune-popup">'
+    + '<div class="cp-head">'
+    + '<span class="cp-dot"></span>'
+    + '<span class="cp-name">' + d.name + '</span>'
+    + '</div>'
+    + rows.join('')
+    + '</div>';
+}
+
+
+/* ══════════════════════════════════════════════════════════
+   OCCUPATION DES SOLS — ESA WorldCover via GEE (asynchrone)
+   ══════════════════════════════════════════════════════════ */
+
+function loadLandUseBreakdown() {
+  var card = document.getElementById('landuseCard');
+  if (!card) return;
+
+  var src = document.getElementById('landuseSource');
+  var params = window.location.search || '';  // reprend ?admin / ?zone courants
+
+  fetch('/api/gee/landuse/' + params, {
+    headers:     _apiHeaders(),
+    credentials: 'same-origin',
+    redirect:    'manual',
+  })
+    .then(function (r) {
+      if (r.type === 'opaqueredirect' || r.status === 401 || r.status === 403) {
+        return Promise.reject('session');
+      }
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function (data) {
+      if (!data || data.no_data) {
+        if (src) src.textContent = 'Donnée non disponible';
+        return;
+      }
+      if (src) src.textContent = data.source || 'ESA WorldCover';
+
+      ['urban', 'cropland', 'forest', 'water', 'bare'].forEach(function (key) {
+        var pct = (data[key] != null) ? data[key] : 0;
+        var bar = card.querySelector('[data-lu="' + key + '"]');
+        var val = card.querySelector('[data-lu-val="' + key + '"]');
+        if (bar) bar.style.width = pct + '%';
+        if (val) val.textContent = (pct.toFixed ? pct.toFixed(1) : pct) + ' %';
+      });
+    })
+    .catch(function (err) {
+      if (err === 'session') return;
+      if (src) src.textContent = 'Donnée indisponible';
+      console.warn('[LandUse] échec :', err);
+    });
+}
+
+
+/* ══════════════════════════════════════════════════════════
+   COORDONNÉES + ZOOM (bas-droite carte)
+   ══════════════════════════════════════════════════════════ */
+
+function _bindMapCoords() {
+  if (typeof map === 'undefined' || !map) return;
+  var elLat  = document.getElementById('mapCoordsLat');
+  var elLng  = document.getElementById('mapCoordsLng');
+  var elZoom = document.getElementById('mapCoordsZoom');
+  if (!elLat || !elLng || !elZoom) return;
+
+  // Throttle léger : mousemove est très bruyant. requestAnimationFrame
+  // garantit qu'on n'écrit dans le DOM qu'à la cadence de l'écran.
+  var pending = false, lastLatLng = null;
+  map.on('mousemove', function (e) {
+    lastLatLng = e.latlng;
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(function () {
+      pending = false;
+      if (!lastLatLng) return;
+      elLat.textContent = lastLatLng.lat.toFixed(4).replace('.', ',');
+      // West = lng négatif. Si lng > 0 (rare en CI), on bascule "E"
+      var lngAbs = Math.abs(lastLatLng.lng).toFixed(4).replace('.', ',');
+      elLng.textContent = lngAbs;
+    });
+  });
+
+  function updateZoom() { elZoom.textContent = map.getZoom(); }
+  map.on('zoomend', updateZoom);
+  updateZoom();
+}
+
+
+/* ══════════════════════════════════════════════════════════
+   PLEIN ÉCRAN CARTE
+   ══════════════════════════════════════════════════════════ */
+
+function toggleMapFullscreen() {
+  var app = document.querySelector('.app');
+  if (!app) return;
+  app.classList.toggle('map-fullscreen');
+  // Leaflet a besoin d'un re-layout après changement de taille du container
+  setTimeout(function () { if (typeof map !== 'undefined' && map) map.invalidateSize(); }, 220);
+}
+
+
+/* ══════════════════════════════════════════════════════════
+   RECHERCHE TOPBAR
+   ══════════════════════════════════════════════════════════ */
+
+function initTopSearch() {
+  var top = document.getElementById('topSearch');
+  if (!top) return;
+
+  // Délègue à la recherche de l'arbre (#treeSearch) — un seul moteur
+  top.addEventListener('input', function () {
+    var tree = document.getElementById('treeSearch');
+    if (tree) {
+      tree.value = this.value;
+      tree.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  });
+
+  // Enter sur le 1er résultat
+  top.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter') return;
+    var first = document.querySelector('.tree-row[data-admin-value]:not([style*="display: none"])');
+    if (first) first.click();
+  });
+}
+
+
+/* ══════════════════════════════════════════════════════════
+   ARBRE ADMINISTRATIF (panneau gauche)
+   ══════════════════════════════════════════════════════════ */
+
+function initAdminTree() {
+  // Caret : toggle expand/collapse des enfants
+  document.querySelectorAll('[data-tree-toggle] .caret').forEach(function (caret) {
+    caret.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var row = this.closest('[data-tree-toggle]');
+      var siblings = row && row.nextElementSibling;
+      if (siblings && siblings.classList.contains('tree-children')) {
+        var hidden = siblings.style.display === 'none';
+        siblings.style.display = hidden ? '' : 'none';
+        this.classList.toggle('open', hidden);
+      }
+    });
+  });
+
+  // Clic sur n'importe quel row avec data-admin-value → applique le filtre
+  // Format de value :
+  //   "district:CIV-DIS-LAGUNES" → switchAdmin (filtre admin)
+  //   "zone:ABJ"                 → switchZone (filtre zone)
+  document.querySelectorAll('[data-admin-value]').forEach(function (row) {
+    row.addEventListener('click', function (e) {
+      // Si on a cliqué sur le caret, on a déjà géré (toggle), on s'arrête là
+      if (e.target.closest('.caret')) return;
+      var val = this.dataset.adminValue;
+      if (!val) return;
+      if (val.indexOf('zone:') === 0) {
+        switchZone(val.slice(5));
+      } else {
+        switchAdmin(val);
+      }
+    });
+  });
+
+  // Recherche dans l'arbre (filtre client-side, expand auto si match)
+  var search = document.getElementById('treeSearch');
+  if (search && !search.dataset.bound) {
+    search.dataset.bound = '1';
+    search.addEventListener('input', function () {
+      var q = this.value.toLowerCase().trim();
+      document.querySelectorAll('.tree-row').forEach(function (row) {
+        var label = row.querySelector('.tree-label');
+        if (!label) return;
+        var text = label.textContent.toLowerCase();
+        var match = !q || text.indexOf(q) >= 0;
+        row.style.display = match ? '' : 'none';
+      });
+      // En mode recherche, on déploie tous les enfants pour faciliter la lecture
+      document.querySelectorAll('.tree-children').forEach(function (c) {
+        c.style.display = q ? '' : (c.dataset.userOpen === '1' ? '' : c.style.display);
+      });
+      if (q) document.querySelectorAll('.caret').forEach(function (c) { c.classList.add('open'); });
+    });
+  }
+
+  // Auto-scroll vers le nœud actif (évite l'effet "zones flottantes" quand
+  // un district sélectionné est en bas de l'arbre)
+  var active = document.querySelector('.tree-row.selected');
+  if (active && typeof active.scrollIntoView === 'function') {
+    setTimeout(function () {
+      active.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }, 50);
+  }
+}
+
+
+/* Stub basemap switcher — sera branché sur la vraie logique tile en passe 4 */
+function _switchBasemap(name) {
+  // Mémorise le choix ; la bascule effective de tile layer existe déjà dans
+  // _buildTileLayer (cf. settings). Ici on déclenche juste la même logique.
+  if (typeof _settings !== 'undefined' && _settings) {
+    var map_to_setting = { 'dark': 'dark', 'light': 'light', 'satellite': 'satellite' };
+    _settings.tileStyle = map_to_setting[name] || 'dark';
+    if (typeof _saveSettings === 'function') _saveSettings();
+    if (typeof map !== 'undefined' && map && typeof _buildTileLayer === 'function') {
+      if (typeof _tileLayer !== 'undefined' && _tileLayer) map.removeLayer(_tileLayer);
+      _tileLayer = _buildTileLayer(_settings.tileStyle);
+      _tileLayer.addTo(map);
+    }
+  }
 }

@@ -1,0 +1,20 @@
+# Configuration pytest pour GéoDash.
+# Lancer les tests :
+#   docker compose exec web pytest                     # tous les tests
+#   docker compose exec web pytest -k geojson          # filtre par nom
+#   docker compose exec web pytest -v                  # verbose
+#   docker compose exec web pytest --reuse-db          # garde la DB de test entre runs (plus rapide)
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings_test"
+python_files = ["test_*.py", "*_test.py"]
+testpaths = ["dashboard/tests", "admin_divisions/tests"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "-ra",
+]
+filterwarnings = [
+    # Bruit Django 5 inoffensif
+    "ignore::DeprecationWarning:django",
+]

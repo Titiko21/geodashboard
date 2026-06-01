@@ -39,7 +39,27 @@ def _road_color(score):
     return "#94a3b8"
 
 def _geojson(obj):
-    """Retourne le geojson depuis un JSONField (dict ou string)."""
+    """
+    Retourne le GeoJSON de l'objet (LineString / Polygon).
+
+    Stratégie post-migration PostGIS :
+      1. Priorité au champ `geom` (GeometryField PostGIS) → source de vérité.
+         `geom.geojson` est une property native Django qui sérialise via GDAL,
+         identique au format attendu par le frontend Leaflet.
+      2. Fallback sur le `geojson` JSONField historique pour les lignes legacy
+         dont la géométrie n'a pas pu être migrée (322 polygones FloodRisk
+         dégénérés au moment de la data migration 0006).
+      3. None si ni l'un ni l'autre ne sont exploitables.
+    """
+    geom = getattr(obj, 'geom', None)
+    if geom is not None:
+        try:
+            # `geom.geojson` renvoie une string JSON ; on la parse en dict pour
+            # rester cohérent avec ce qu'attendent les sérialiseurs JSON.
+            return json.loads(geom.geojson)
+        except Exception:
+            pass  # tombe sur le fallback JSONField
+
     g = getattr(obj, 'geojson', None)
     if not g:
         return None
@@ -52,9 +72,9 @@ def _geojson(obj):
 
 def _zone_bbox(zone):
     """
-    Calcule une bounding box approximative autour du centroïde de la zone.
-    Rayon de ~0.5° (≈ 55 km) — suffisant pour les analyses régionales GEE.
-    Zone n'a pas de bbox → on retourne un bbox par défaut centré sur Abidjan.
+    Bbox approximative autour du centroïde d'une Zone (legacy).
+    Conservée pour rétrocompatibilité ; les analyses GEE utilisent désormais
+    `_resolve_gee_geom` qui prend la géométrie admin réelle.
     """
     delta = 0.5
     if not zone:
@@ -66,6 +86,50 @@ def _zone_bbox(zone):
         "north": zone.lat_center + delta,
     }
 
+
+def _resolve_gee_geom(request):
+    """
+    Résout la géométrie GEE pertinente selon les filtres URL :
+      - ?admin=<level>:<code>  → polygone réel du district/région
+      - ?zone=<code>           → cercle de 10 km autour du centroïde
+      - sinon                  → bbox approximative Côte d'Ivoire
+
+    Renvoie un tuple (geom_geojson_str, scope_label) où geom_geojson_str
+    est une chaîne JSON GeoJSON, et scope_label le nom lisible.
+    """
+    import json as _json
+
+    # 1) Filtre admin → géométrie réelle
+    admin_level, admin_obj = _parse_admin_filter(request)
+    if admin_obj and admin_obj.geom is not None:
+        return admin_obj.geom.geojson, admin_obj.name
+
+    # 2) Zone → cercle 10 km autour du centroïde via PostGIS
+    zone_code = (request.GET.get("zone") or "").strip()
+    if zone_code:
+        zone = Zone.objects.filter(code=zone_code).first()
+        if zone:
+            from django.contrib.gis.geos import Point
+            from django.db import connection
+            pt = Point(zone.lng_center, zone.lat_center, srid=4326)
+            with connection.cursor() as cur:
+                cur.execute(
+                    "SELECT ST_AsGeoJSON(ST_Buffer(%s::geography, 10000)::geometry)",
+                    [pt.wkt],
+                )
+                row = cur.fetchone()
+            if row and row[0]:
+                return row[0], zone.name
+
+    # 3) Fallback Côte d'Ivoire
+    civ_bbox = _json.dumps({
+        "type": "Polygon",
+        "coordinates": [[
+            [-8.6, 4.3], [-2.5, 4.3], [-2.5, 10.7], [-8.6, 10.7], [-8.6, 4.3]
+        ]],
+    })
+    return civ_bbox, "Côte d'Ivoire"
+
 def _gee_available():
     try:
         from .gee_integration import _gee_initialized, init_gee
@@ -76,65 +140,216 @@ def _gee_available():
         return False
 
 
+def _parse_admin_filter(request):
+    """
+    Lit le paramètre `?admin=<level>:<code>` (sélecteur unifié) et résout
+    l'entité admin correspondante.
+
+    Niveaux supportés : district, region, departement, sousprefecture, commune.
+    Renvoie (level, obj) ou (None, None) si paramètre absent / invalide.
+    """
+    from admin_divisions.models import (
+        Commune, Departement, District, Region, SousPrefecture,
+    )
+
+    raw = (request.GET.get("admin") or "").strip()
+    if not raw or ":" not in raw:
+        return None, None
+
+    level, code = raw.split(":", 1)
+    MODEL_MAP = {
+        "district":       District,
+        "region":         Region,
+        "departement":    Departement,
+        "sousprefecture": SousPrefecture,
+        "commune":        Commune,
+    }
+    Model = MODEL_MAP.get(level)
+    if not Model:
+        return None, None
+    try:
+        return level, Model.objects.get(code=code)
+    except Model.DoesNotExist:
+        return None, None
+
+
+def _filter_querysets_by_admin(roads_qs, floods_qs, veg_qs, admin_obj):
+    """Filtre spatial PostGIS (ST_Intersects) si admin_obj a une géom."""
+    if admin_obj is None or getattr(admin_obj, "geom", None) is None:
+        return roads_qs, floods_qs, veg_qs
+    roads_qs  = roads_qs.filter(geom__intersects=admin_obj.geom)
+    floods_qs = floods_qs.filter(geom__intersects=admin_obj.geom)
+    veg_qs    = veg_qs.filter(geom__intersects=admin_obj.geom)
+    return roads_qs, floods_qs, veg_qs
+
+
+# Buffer autour du centroïde d'une Zone pour le filtrage spatial. La Zone
+# n'ayant pas de polygone propre (juste lat/lng), on définit une emprise
+# raisonnable d'une commune urbaine type Côte d'Ivoire.
+ZONE_SPATIAL_BUFFER_M = 2000  # 2 km autour du centroïde
+
+
+def _filter_querysets_by_zone_spatial(roads_qs, floods_qs, veg_qs, zone):
+    """
+    Restreint spatialement les querysets à un buffer autour du centroïde
+    de la Zone. Évite que des routes/inondations/végétation taguées avec
+    le code de la zone mais géographiquement chez la commune voisine
+    polluent l'affichage.
+    """
+    if zone is None:
+        return roads_qs, floods_qs, veg_qs
+    from django.contrib.gis.geos import Point
+    from django.contrib.gis.measure import D
+    centroid = Point(zone.lng_center, zone.lat_center, srid=4326)
+    roads_qs  = roads_qs.filter(geom__distance_lte=(centroid, D(m=ZONE_SPATIAL_BUFFER_M)))
+    floods_qs = floods_qs.filter(geom__distance_lte=(centroid, D(m=ZONE_SPATIAL_BUFFER_M)))
+    veg_qs    = veg_qs.filter(geom__distance_lte=(centroid, D(m=ZONE_SPATIAL_BUFFER_M)))
+    return roads_qs, floods_qs, veg_qs
+
+
+# Routes stratégiques (axes structurants) — affichées par défaut pour une
+# lecture décisionnelle non encombrée. Les voies résidentielles/service/track
+# sont masquées sauf si ?focus=all.
+STRATEGIC_HIGHWAY_REGEX = r"Type OSM : (motorway|trunk|primary|secondary)"
+
+
+def _apply_strategic_filter(roads_qs, request):
+    """
+    Filtre les routes pour ne garder que les axes structurants (motorway,
+    trunk, primary, secondary) par défaut. Passer ?focus=all pour afficher
+    tout le réseau y compris les voies résidentielles et tertiaires.
+    """
+    focus = (request.GET.get("focus") or "major").strip().lower()
+    if focus == "all":
+        return roads_qs
+    # Le type OSM est stocké dans le champ `notes` ("Type OSM : motorway | …")
+    return roads_qs.filter(notes__iregex=STRATEGIC_HIGHWAY_REGEX)
+
+
+def _filter_zones_by_admin(zones_qs, admin_obj):
+    """
+    Restreint un queryset de Zone aux centroïdes contenus dans admin.geom.
+
+    Volontairement en Python (et pas en SQL) parce qu'on a au plus 170 zones,
+    et que Zone n'a pas de GeometryField (juste lat_center/lng_center). Coût
+    négligeable, code lisible.
+    """
+    if admin_obj is None or getattr(admin_obj, "geom", None) is None:
+        return zones_qs
+    from django.contrib.gis.geos import Point
+    poly = admin_obj.geom
+    ids_inside = [
+        z.id for z in zones_qs
+        if poly.contains(Point(z.lng_center, z.lat_center, srid=4326))
+    ]
+    return zones_qs.filter(id__in=ids_inside)
+
+
+def _build_admin_tree(districts, all_zones):
+    """
+    Construit l'arbre hiérarchique du panneau gauche :
+        Côte d'Ivoire → District → Zone (commune/ville)
+
+    Chaque zone est rattachée à un district par test ST_Contains de son
+    centroïde. Les zones sans rattachement (centroïde hors de tous les
+    districts à cause d'imprécisions) tombent dans un groupe "Non classées".
+
+    Format renvoyé (consommé par le template) :
+        [
+          {
+            "district":      <District>,
+            "select_value":  "district:CIV-DIS-LAGUNES",
+            "zones": [
+                {"zone": <Zone>, "select_value": "zone:ABJ"},
+                ...
+            ],
+          }, ...
+        ]
+    """
+    from django.contrib.gis.geos import Point
+
+    nodes = []
+    unclassified = []
+
+    # Pré-calcul des Points (1 par zone) pour éviter les recréations en boucle
+    zones_with_pt = [
+        (z, Point(z.lng_center, z.lat_center, srid=4326))
+        for z in all_zones
+    ]
+
+    # Pour chaque district, on identifie ses zones (Point in Polygon)
+    classified_ids = set()
+    for d in districts:
+        bucket = []
+        if d.geom is not None:
+            for z, pt in zones_with_pt:
+                if d.geom.contains(pt):
+                    bucket.append({"zone": z, "select_value": f"zone:{z.code}"})
+                    classified_ids.add(z.id)
+        nodes.append({
+            "district":      d,
+            "select_value":  f"district:{d.code}",
+            "zones":         sorted(bucket, key=lambda x: x["zone"].name),
+        })
+
+    # Zones non classées (hors géométries des districts)
+    for z, _pt in zones_with_pt:
+        if z.id not in classified_ids:
+            unclassified.append({"zone": z, "select_value": f"zone:{z.code}"})
+
+    if unclassified:
+        nodes.append({
+            "district":     None,
+            "select_value": "",
+            "zones":        sorted(unclassified, key=lambda x: x["zone"].name),
+            "unclassified": True,
+        })
+
+    return nodes
+
+
 # ── Vue principale ─────────────────────────────────────────────────────────────
 
 def dashboard(request):
-    zone_code = request.GET.get("zone", "")
-    zones     = Zone.objects.all().order_by("name")
+    # ── 1. Parse du filtre admin unifié (?admin=<level>:<code>) ─────────
+    admin_level, admin_obj = _parse_admin_filter(request)
+    admin_label = admin_obj.name if admin_obj else None
 
+    # ── 2. Liste des zones, filtrée par admin si applicable ─────────────
+    zones = _filter_zones_by_admin(Zone.objects.all().order_by("name"), admin_obj)
+
+    # ── 3. Zone sélectionnée : ignorée si en dehors du filtre admin ─────
+    zone_code = request.GET.get("zone", "")
     selected_zone = None
     if zone_code:
-        selected_zone = Zone.objects.filter(code=zone_code).first()
+        selected_zone = zones.filter(code=zone_code).first()
+        if not selected_zone:
+            zone_code = ""  # reset si la zone n'est plus dans la liste
 
+    # ── 4. QuerySets de base ────────────────────────────────────────────
     roads_qs  = RoadSegment.objects.filter(zone=selected_zone)        if selected_zone else RoadSegment.objects.all()
     floods_qs = FloodRisk.objects.filter(zone=selected_zone)          if selected_zone else FloodRisk.objects.all()
     veg_qs    = VegetationDensity.objects.filter(zone=selected_zone)  if selected_zone else VegetationDensity.objects.all()
 
-    map_data = {
-        "routes": [
-            {
-                "id":              r.id,
-                "name":            r.name,
-                "condition_score": r.condition_score,
-                "status":          r.status,
-                "status_label":    r.get_status_display(),
-                "surface_type":    r.surface_type,
-                "color":           _road_color(r.condition_score),
-                "notes":           r.notes,
-                "geojson":         _geojson(r),
-            }
-            for r in roads_qs
-        ],
-        "floods": [
-            {
-                "id":          f.id,
-                "name":        f.name,
-                "risk_level":  f.risk_level,
-                "risk_label":  f.get_risk_level_display(),
-                "risk_score":  f.risk_score,
-                "area_km2":    _js_num(f.area_km2),
-                "rainfall_mm": _js_num(f.rainfall_mm),
-                "color": {
-                    "faible": "#22d3ee", "modere": "#3b82f6",
-                    "eleve": "#f97316", "critique": "#dc2626"
-                }.get(f.risk_level, "#3b82f6"),
-                "geojson": _geojson(f),
-            }
-            for f in floods_qs
-        ],
-        "vegetation": [
-            {
-                "id":               v.id,
-                "name":             v.name,
-                "ndvi_value":       _js_num(v.ndvi_value),
-                "coverage_percent": _js_num(v.coverage_percent),
-                "density_class":    v.density_class,
-                "density_label":    v.get_density_class_display(),
-                "geojson":          _geojson(v),
-            }
-            for v in veg_qs
-        ],
-    }
+    # ── 5a. Filtre spatial admin (ST_Intersects via PostGIS) ────────────
+    roads_qs, floods_qs, veg_qs = _filter_querysets_by_admin(
+        roads_qs, floods_qs, veg_qs, admin_obj
+    )
+
+    # ── 5b. Filtre spatial zone (buffer 2 km autour du centroïde) ───────
+    # L'import OSM se fait par bbox autour du centroïde, ce qui fait
+    # déborder les routes d'Adjamé sur Cocody et inversement. Le buffer
+    # spatial corrige : on n'affiche que ce qui est vraiment dans la zone.
+    roads_qs, floods_qs, veg_qs = _filter_querysets_by_zone_spatial(
+        roads_qs, floods_qs, veg_qs, selected_zone
+    )
+
+    # ── 5c. Filtre routes stratégiques (default) ────────────────────────
+    roads_qs = _apply_strategic_filter(roads_qs, request)
+
+    # NOTE : les géométries (map_data) ne sont plus injectées inline pour éviter
+    # une page HTML de plusieurs Mo. Le frontend les charge via /api/map-data/
+    # au DOMContentLoaded. Voir dashboard.js → _loadMapData().
 
     avg_val   = roads_qs.aggregate(avg=Avg("condition_score"))["avg"] or 0
     avg_score = round(float(avg_val), 1)
@@ -183,11 +398,70 @@ def dashboard(request):
     avg_ndvi_v = veg_qs.aggregate(avg=Avg("ndvi_value"))["avg"] or 0
     avg_ndvi   = round(float(avg_ndvi_v), 3)
 
+    # ── Sélecteur admin unifié ──────────────────────────────────────────
+    # On annote chaque entité avec sa `select_value` ("level:code") pour que
+    # le template puisse comparer simplement contre `admin_filter_value`.
+    from admin_divisions.models import District, Region
+    districts = list(District.objects.all().order_by("-is_autonomous", "name"))
+    for d in districts:
+        d.select_value = f"district:{d.code}"
+
+    regions = list(
+        Region.objects.select_related("district").all()
+        .order_by("district__name", "name")
+    )
+    for r in regions:
+        r.select_value = f"region:{r.code}"
+
+    admin_filter_value = f"{admin_level}:{admin_obj.code}" if admin_obj else ""
+    admin_is_autonomous = bool(admin_obj and getattr(admin_obj, "is_autonomous", False))
+
+    # Surface en km² de l'admin sélectionnée (via ST_Area géodésique PostGIS).
+    # Pour la vue globale, on garde None — affiché "—" côté template.
+    admin_surface_km2 = None
+    if admin_obj and admin_obj.geom is not None:
+        from django.contrib.gis.db.models.functions import Area
+        from django.contrib.gis.measure import D
+        try:
+            # Cast en geography pour avoir des mètres, puis divisé par 1e6 pour km²
+            from django.db import connection
+            with connection.cursor() as cur:
+                cur.execute(
+                    "SELECT ST_Area(%s::geography) / 1000000.0",
+                    [admin_obj.geom.ewkt],
+                )
+                admin_surface_km2 = round(cur.fetchone()[0], 0)
+        except Exception:
+            admin_surface_km2 = None
+
+    # Arbre hiérarchique pour le panneau gauche (CI > District > Zone)
+    # Utilise TOUTES les zones (170) pas seulement la version filtrée, car
+    # l'arbre montre la structure complète quel que soit le filtre courant.
+    admin_tree = _build_admin_tree(districts, Zone.objects.all().order_by("name"))
+    total_zones_count = Zone.objects.count()
+
+    # Markers points (lat/lng) pour la couche commune cliquable de la carte.
+    # Volontairement minimal — le détail est fetché à la demande via
+    # /api/zones/<code>/stats/ au clic du marker.
+    zones_markers = [
+        {"code": z.code, "name": z.name, "lat": z.lat_center, "lng": z.lng_center}
+        for z in zones
+    ]
+
     context = {
-        "zones":         zones,
-        "selected_zone": selected_zone,
-        "zone_code":     zone_code,
-       "map_data_json":     map_data,
+        "zones":               zones,
+        "selected_zone":       selected_zone,
+        "zone_code":           zone_code,
+        "districts":           districts,
+        "regions":             regions,
+        "admin_tree":          admin_tree,
+        "total_zones_count":   total_zones_count,
+        "admin_filter_value":  admin_filter_value,
+        "admin_label":         admin_label,
+        "admin_is_autonomous": admin_is_autonomous,
+        "admin_surface_km2":   admin_surface_km2,
+        "zones_count":         zones.count(),
+        "zones_markers_json":  zones_markers,
        "chart_routes_json": chart_routes,
        "chart_floods_json": chart_floods,
        "avg_score_json":    avg_score,
@@ -216,6 +490,13 @@ def dashboard(request):
 
 @require_GET
 def api_map_data(request):
+    """
+    Renvoie l'intégralité des géométries (routes / inondations / végétation)
+    consommées par le frontend Leaflet. Structure stable utilisée par
+    dashboard.js → _loadMapData() depuis le découplage de la home (point 3).
+
+    GET /api/map-data/?zone=<code>   (paramètre zone optionnel)
+    """
     zone_code     = request.GET.get("zone", "")
     selected_zone = Zone.objects.filter(code=zone_code).first() if zone_code else None
 
@@ -226,21 +507,56 @@ def api_map_data(request):
     veg_qs    = VegetationDensity.objects.filter(zone=selected_zone) if selected_zone \
                 else VegetationDensity.objects.all()
 
+    # Filtre admin unifié (?admin=<level>:<code>) — ST_Intersects via PostGIS
+    _admin_level, _admin_obj = _parse_admin_filter(request)
+    roads_qs, floods_qs, veg_qs = _filter_querysets_by_admin(
+        roads_qs, floods_qs, veg_qs, _admin_obj
+    )
+
+    flood_colors = {
+        "faible": "#22d3ee", "modere": "#3b82f6",
+        "eleve": "#f97316", "critique": "#dc2626",
+    }
+
     return JsonResponse({
         "routes": [
-            {"id": r.id, "name": r.name, "condition_score": r.condition_score,
-             "status": r.status, "color": _road_color(r.condition_score),
-             "geojson": _geojson(r)}
+            {
+                "id":              r.id,
+                "name":            r.name,
+                "condition_score": r.condition_score,
+                "status":          r.status,
+                "status_label":    r.get_status_display(),
+                "surface_type":    r.surface_type,
+                "color":           _road_color(r.condition_score),
+                "notes":           r.notes,
+                "geojson":         _geojson(r),
+            }
             for r in roads_qs
         ],
         "floods": [
-            {"id": f.id, "name": f.name, "risk_level": f.risk_level,
-             "risk_score": f.risk_score, "geojson": _geojson(f)}
+            {
+                "id":          f.id,
+                "name":        f.name,
+                "risk_level":  f.risk_level,
+                "risk_label":  f.get_risk_level_display(),
+                "risk_score":  f.risk_score,
+                "area_km2":    _js_num(f.area_km2),
+                "rainfall_mm": _js_num(f.rainfall_mm),
+                "color":       flood_colors.get(f.risk_level, "#3b82f6"),
+                "geojson":     _geojson(f),
+            }
             for f in floods_qs
         ],
         "vegetation": [
-            {"id": v.id, "name": v.name, "ndvi_value": _js_num(v.ndvi_value),
-             "density_class": v.density_class, "geojson": _geojson(v)}
+            {
+                "id":               v.id,
+                "name":             v.name,
+                "ndvi_value":       _js_num(v.ndvi_value),
+                "coverage_percent": _js_num(v.coverage_percent),
+                "density_class":    v.density_class,
+                "density_label":    v.get_density_class_display(),
+                "geojson":          _geojson(v),
+            }
             for v in veg_qs
         ],
     })
@@ -387,15 +703,42 @@ def api_roads_export(request):
 
 @require_GET
 def api_zone_stats(request, zone_code):
-    zone  = get_object_or_404(Zone, code=zone_code)
-    roads = RoadSegment.objects.filter(zone=zone)
-    avg   = roads.aggregate(avg=Avg("condition_score"))["avg"] or 0
+    """
+    Snapshot complet d'une zone/commune pour le popover Leaflet (L4).
+    Renvoie nom, description, coordonnées, KPIs routes/inondations/végétation
+    + compteur d'alertes actives.
+    """
+    zone   = get_object_or_404(Zone, code=zone_code)
+    roads  = RoadSegment.objects.filter(zone=zone)
+    floods = FloodRisk.objects.filter(zone=zone)
+    veg    = VegetationDensity.objects.filter(zone=zone)
+
+    avg_score = float(roads.aggregate(avg=Avg("condition_score"))["avg"] or 0)
+    avg_flood = float(floods.aggregate(avg=Avg("risk_score"))["avg"] or 0)
+    avg_ndvi  = float(veg.aggregate(avg=Avg("ndvi_value"))["avg"] or 0)
+
     return JsonResponse({
-        "zone_code":   zone_code,
-        "avg_score":   round(float(avg), 1),
-        "road_count":  roads.count(),
-        "flood_count": FloodRisk.objects.filter(zone=zone).count(),
-        "alert_count": Alert.objects.filter(zone=zone, is_read=False).count(),
+        "code":         zone.code,
+        "name":         zone.name,
+        "description":  zone.description or "",
+        "lat":          zone.lat_center,
+        "lng":          zone.lng_center,
+        "roads": {
+            "total":     roads.count(),
+            "avg_score": round(avg_score, 1),
+            "critical":  roads.filter(condition_score__lt=40).count(),
+        },
+        "floods": {
+            "total":     floods.count(),
+            "avg_score": round(avg_flood, 0),
+            "critical":  floods.filter(risk_level__in=["eleve", "critique"]).count(),
+        },
+        "vegetation": {
+            "total":    veg.count(),
+            "avg_ndvi": round(avg_ndvi, 3),
+            "dense":    veg.filter(density_class__in=["dense", "very_dense"]).count(),
+        },
+        "alerts_count": Alert.objects.filter(zone=zone, is_read=False).count(),
     })
 
 
@@ -407,101 +750,212 @@ from .gee_integration import get_ndvi_stats, get_flood_extent, get_road_surface_
 @require_GET
 def api_gee_ndvi(request):
     """
-    Retourne les statistiques NDVI et l'URL de tuiles Leaflet pour une zone.
+    Statistiques NDVI + tiles Leaflet pour le filtre actif.
 
-    GET /api/gee/ndvi/?zone=<code>
+    GET /api/gee/ndvi/?admin=<level>:<code>   (recommandé — polygone réel)
+        /api/gee/ndvi/?zone=<code>            (legacy — cercle 10 km)
 
-    Réponses :
-        200 + données JSON        → succès
-        200 + {"error": "..."}    → GEE disponible mais pas de données
-        400                       → paramètre zone manquant ou invalide
-        500                       → erreur GEE inattendue
+    Le tile renvoyé est CLIPPÉ sur la géométrie demandée → l'overlay ne
+    déborde plus de la zone choisie.
     """
-    zone_code = request.GET.get("zone", "").strip()
-    if not zone_code:
-        return JsonResponse({"error": "Paramètre 'zone' requis."}, status=400)
-
-    zone = get_object_or_404(Zone, code=zone_code)
-    bbox = _zone_bbox(zone)
+    geom_geojson, scope = _resolve_gee_geom(request)
 
     try:
-        data = get_ndvi_stats(bbox)
+        data = get_ndvi_stats(geom_geojson)
     except Exception as exc:
-        logger.error("[GEE NDVI] Erreur inattendue pour zone %s : %s", zone_code, exc)
+        logger.error("[GEE NDVI] Erreur inattendue (%s) : %s", scope, exc)
         return JsonResponse({"error": f"Erreur GEE : {str(exc)}"}, status=500)
 
     if data is None:
         return JsonResponse({
             "error":     "Aucune image Sentinel-2 disponible pour cette zone.",
             "no_data":   True,
-            "zone":      zone_code,
+            "scope":     scope,
             "tiles_url": None,
         }, status=200)
 
-    data["zone"] = zone_code
+    data["scope"] = scope
     return JsonResponse(data)
 
 
 @require_GET
 def api_gee_flood(request):
-    """
-    Retourne la détection d'inondation SAR et l'URL de tuiles Leaflet pour une zone.
-
-    GET /api/gee/flood/?zone=<code>
-
-    Réponses identiques à api_gee_ndvi.
-    """
-    zone_code = request.GET.get("zone", "").strip()
-    if not zone_code:
-        return JsonResponse({"error": "Paramètre 'zone' requis."}, status=400)
-
-    zone = get_object_or_404(Zone, code=zone_code)
-    bbox = _zone_bbox(zone)
+    """Détection SAR + tiles Leaflet (clippées sur la région réelle)."""
+    geom_geojson, scope = _resolve_gee_geom(request)
 
     try:
-        data = get_flood_extent(bbox)
+        data = get_flood_extent(geom_geojson)
     except Exception as exc:
-        logger.error("[GEE Flood] Erreur inattendue pour zone %s : %s", zone_code, exc)
+        logger.error("[GEE Flood] Erreur inattendue (%s) : %s", scope, exc)
         return JsonResponse({"error": f"Erreur GEE : {str(exc)}"}, status=500)
 
     if data is None:
         return JsonResponse({
             "error":     "Données SAR Sentinel-1 insuffisantes pour cette zone.",
             "no_data":   True,
-            "zone":      zone_code,
+            "scope":     scope,
             "tiles_url": None,
         }, status=200)
 
-    data["zone"] = zone_code
+    data["scope"] = scope
     return JsonResponse(data)
 
 
 @require_GET
 def api_gee_road(request):
-    """
-    Retourne l'indice de qualité de surface routière via NDWI (expérimental).
-
-    GET /api/gee/road/?zone=<code>
-    """
-    zone_code = request.GET.get("zone", "").strip()
-    if not zone_code:
-        return JsonResponse({"error": "Paramètre 'zone' requis."}, status=400)
-
-    zone = get_object_or_404(Zone, code=zone_code)
-    bbox = _zone_bbox(zone)
+    """Indice qualité chaussée NDWI (Landsat) sur la région réelle."""
+    geom_geojson, scope = _resolve_gee_geom(request)
 
     try:
-        data = get_road_surface_index(bbox)
+        data = get_road_surface_index(geom_geojson)
     except Exception as exc:
-        logger.error("[GEE Road] Erreur inattendue pour zone %s : %s", zone_code, exc)
+        logger.error("[GEE Road] Erreur inattendue (%s) : %s", scope, exc)
         return JsonResponse({"error": f"Erreur GEE : {str(exc)}"}, status=500)
 
     if data is None:
         return JsonResponse({
             "error":   "Données Landsat insuffisantes pour cette zone.",
             "no_data": True,
-            "zone":    zone_code,
+            "scope":   scope,
         }, status=200)
 
-    data["zone"] = zone_code
+    data["scope"] = scope
     return JsonResponse(data)
+
+
+# ── API — Découpage administratif (admin_divisions) ───────────────────────────
+
+@require_GET
+def api_admin_divisions(request):
+    """
+    Renvoie un GeoJSON FeatureCollection des entités du découpage admin.
+
+    GET /api/admin/divisions/?level=district     (défaut)
+                              level=region
+                              level=all          (district + région ensemble)
+
+    Chaque feature porte dans ses `properties` : level, code, name, et selon
+    le cas is_autonomous (district) ou district (parent d'une région).
+    """
+    from admin_divisions.models import District, Region
+
+    level = request.GET.get("level", "district")
+    if level not in ("district", "region", "all"):
+        return JsonResponse(
+            {"error": "level doit être 'district', 'region' ou 'all'."},
+            status=400,
+        )
+
+    features = []
+
+    if level in ("district", "all"):
+        for d in District.objects.filter(geom__isnull=False):
+            features.append({
+                "type": "Feature",
+                "properties": {
+                    "level":         "district",
+                    "code":          d.code,
+                    "name":          d.name,
+                    "is_autonomous": d.is_autonomous,
+                },
+                "geometry": json.loads(d.geom.geojson),
+            })
+
+    if level in ("region", "all"):
+        for r in Region.objects.filter(geom__isnull=False).select_related("district"):
+            features.append({
+                "type": "Feature",
+                "properties": {
+                    "level":    "region",
+                    "code":     r.code,
+                    "name":     r.name,
+                    "district": r.district.name,
+                },
+                "geometry": json.loads(r.geom.geojson),
+            })
+
+    return JsonResponse({
+        "type":     "FeatureCollection",
+        "features": features,
+    })
+
+
+# ── API — Occupation des sols (ESA WorldCover via GEE) ────────────────────────
+
+@require_GET
+def api_gee_landuse(request):
+    """
+    Renvoie la distribution d'occupation des sols pour la zone admin filtrée.
+
+    GET /api/gee/landuse/?admin=<level>:<code>
+        /api/gee/landuse/?zone=<code>     (utilise un buffer autour du centroïde)
+
+    Réponse :
+        {
+          "urban": 31.4, "cropland": 24.8, "forest": 22.1,
+          "water": 14.2, "bare": 7.5,
+          "source": "ESA WorldCover v200 (2021)",
+          "scope": "Lagunes"
+        }
+    """
+    from .gee_integration import get_land_use_breakdown
+
+    # 1. Résoudre la géométrie cible
+    geom = None
+    scope_label = "Côte d'Ivoire"
+
+    admin_level, admin_obj = _parse_admin_filter(request)
+    if admin_obj and admin_obj.geom:
+        geom = admin_obj.geom
+        scope_label = admin_obj.name
+
+    if not geom:
+        zone_code = request.GET.get("zone", "").strip()
+        if zone_code:
+            zone = Zone.objects.filter(code=zone_code).first()
+            if zone:
+                # Pas de géom polygone sur Zone (juste lat/lng) → buffer 5 km
+                # via PostGIS (cast en geography pour des mètres, buffer puis
+                # cast retour en geometry 4326).
+                from django.contrib.gis.geos import Point
+                from django.db import connection
+                point = Point(zone.lng_center, zone.lat_center, srid=4326)
+                with connection.cursor() as cur:
+                    cur.execute(
+                        "SELECT ST_AsGeoJSON(ST_Buffer(%s::geography, 5000)::geometry)",
+                        [point.wkt],
+                    )
+                    row = cur.fetchone()
+                if row and row[0]:
+                    geom_geojson = row[0]
+                    result = get_land_use_breakdown(geom_geojson)
+                    if result is None:
+                        return JsonResponse(
+                            {"error": "GEE indisponible ou aucun résultat.",
+                             "no_data": True, "scope": zone.name},
+                            status=200,
+                        )
+                    result["scope"] = zone.name
+                    return JsonResponse(result)
+
+    if not geom:
+        # Fallback : bbox approximative pays entier (utile pour la vue globale)
+        from django.contrib.gis.geos import Polygon as GP
+        geom = GP.from_bbox((-8.6, 4.3, -2.5, 10.7))
+        geom.srid = 4326
+
+    try:
+        geom_geojson = geom.geojson if hasattr(geom, "geojson") else json.dumps(geom)
+        result = get_land_use_breakdown(geom_geojson)
+    except Exception as exc:
+        logger.error("[LandUse] erreur : %s", exc)
+        return JsonResponse({"error": str(exc)}, status=500)
+
+    if result is None:
+        return JsonResponse(
+            {"error": "GEE indisponible ou aucun résultat.", "no_data": True,
+             "scope": scope_label},
+            status=200,
+        )
+    result["scope"] = scope_label
+    return JsonResponse(result)

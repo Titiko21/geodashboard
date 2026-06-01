@@ -1,4 +1,4 @@
-from django.db import models
+from django.contrib.gis.db import models
 from django.utils import timezone
 
 
@@ -49,6 +49,10 @@ class RoadSegment(models.Model):
                           blank=True, verbose_name="Type de surface",
                       )
     geojson         = models.JSONField(default=dict, help_text="GeoJSON LineString du tracé")
+    geom            = models.GeometryField(
+                          srid=4326, null=True, blank=True, spatial_index=True,
+                          help_text="Géométrie PostGIS (LineString WGS84) — peuplée depuis `geojson`",
+                      )
     last_analyzed   = models.DateTimeField(default=timezone.now)
     notes           = models.TextField(blank=True)
 
@@ -92,6 +96,10 @@ class FloodRisk(models.Model):
     area_km2      = models.FloatField(help_text="Surface en km²")
     rainfall_mm   = models.FloatField(default=0, help_text="Précipitations récentes en mm")
     geojson       = models.JSONField(default=dict, help_text="GeoJSON Polygon de la zone")
+    geom          = models.GeometryField(
+                        srid=4326, null=True, blank=True, spatial_index=True,
+                        help_text="Géométrie PostGIS (Polygon WGS84) — peuplée depuis `geojson`",
+                    )
     last_analyzed = models.DateTimeField(default=timezone.now)
 
     class Meta:
@@ -137,6 +145,10 @@ class VegetationDensity(models.Model):
                              help_text="Variation NDVI vs analyse précédente",
                          )
     geojson            = models.JSONField(default=dict, help_text="GeoJSON Polygon de la zone")
+    geom               = models.GeometryField(
+                             srid=4326, null=True, blank=True, spatial_index=True,
+                             help_text="Géométrie PostGIS (Polygon WGS84) — peuplée depuis `geojson`",
+                         )
     last_analyzed      = models.DateTimeField(default=timezone.now)
 
     class Meta:
@@ -184,6 +196,14 @@ class Alert(models.Model):
     created_at = models.DateTimeField(default=timezone.now)
     lat        = models.FloatField(null=True, blank=True)
     lng        = models.FloatField(null=True, blank=True)
+
+    # Référence directe vers l'objet source (route / inondation / végétation).
+    # Évite toute résolution ambiguë par nom lors du repositionnement
+    # géographique : deux objets homonymes ne sont plus confondus.
+    source_type = models.CharField(
+        max_length=20, choices=CATEGORY_CHOICES, null=True, blank=True,
+    )
+    source_id   = models.PositiveIntegerField(null=True, blank=True)
 
     class Meta:
         verbose_name        = "Alerte"

@@ -2,7 +2,8 @@
 populate_geodata.py — GéoDash
 Importe les données géospatiales depuis OpenStreetMap via l'API Overpass.
 
-CORRECTIF v4 :
+CORRECTIF v5 :
+  - Remplacement de --roads-only par --type (routes|eau|vegetation|all)
   - Délai inter-zones augmenté (30s par défaut, configurable via --delay)
   - Gestion correcte des 403 : pause longue + rotation d'instance
   - Option --batch-size : pause longue tous les N zones
@@ -12,9 +13,11 @@ CORRECTIF v4 :
 Usage :
     python manage.py populate_geodata                          # toutes les zones CI
     python manage.py populate_geodata --zone MAN               # une seule ville
+    python manage.py populate_geodata --zone BFL --type vegetation  # végétation seule
+    python manage.py populate_geodata --zone BFL --type eau         # eau seule
+    python manage.py populate_geodata --zone BFL --type routes      # routes seules
     python manage.py populate_geodata --dry-run                # voir sans écrire
     python manage.py populate_geodata --clear                  # repart de zéro
-    python manage.py populate_geodata --roads-only             # routes uniquement
     python manage.py populate_geodata --delay 45               # 45s entre zones
     python manage.py populate_geodata --batch-size 10          # pause 5min tous les 10 zones
 """
@@ -49,6 +52,14 @@ MAX_RETRIES       = 3
 RETRY_DELAY       = 15.0
 SEARCH_RADIUS     = 0.05
 
+# User-Agent : Overpass + CloudFlare rejettent désormais (HTTP 406) les UA
+# contenant des caractères non-ASCII ou des contacts factices. ASCII pur +
+# contact réel obligatoire. Surchargeable via OVERPASS_USER_AGENT.
+OVERPASS_USER_AGENT = os.environ.get(
+    "OVERPASS_USER_AGENT",
+    "geodashboard/1.0 (+https://github.com/Tity21/geedashboard)",
+)
+
 # Délai entre les 3 requêtes d'une même zone (routes / eau / veg)
 INTER_QUERY_DELAY = 5.0    # ← augmenté : 3s → 5s
 
@@ -57,9 +68,12 @@ BAN_WAIT          = 300    # 5 minutes
 BATCH_PAUSE       = 300    # 5 minutes tous les N zones (configurable)
 
 # ── Limites SÉPARÉES par type de données ──
-MAX_ROADS        = 500
-MAX_WATER        = 300
-MAX_VEGETATION   = 300
+# Configurables via env pour ne pas tronquer les grosses zones (Yopougon, Cocody...).
+# Overpass impose lui-même un quota via le bbox et `maxsize:100000000` plus haut ;
+# ces caps restent une ceinture de sécurité contre une zone aberrante.
+MAX_ROADS        = int(os.environ.get("OSM_MAX_ROADS", "10000"))
+MAX_WATER        = int(os.environ.get("OSM_MAX_WATER", "3000"))
+MAX_VEGETATION   = int(os.environ.get("OSM_MAX_VEGETATION", "3000"))
 
 _consecutive_403 = 0   # ← NOUVEAU : compteur de 403 consécutifs
 _consecutive_429 = 0
@@ -418,6 +432,48 @@ def _close_polygon(coords: list) -> list:
     return coords
 
 
+def _geojson_to_geom(geojson_value):
+    """
+    Convertit un dict GeoJSON en GEOSGeometry SRID 4326, ou None si invalide.
+    Utilisé pour peupler le champ `geom` PostGIS en parallèle du `geojson` JSON.
+
+    Mêmes règles que la migration 0006 :
+      - LineString : >= 2 points
+      - Polygon : chaque ring >= 4 points (auto-fermé si nécessaire)
+      - Skip silencieux pour tout ce qui ne parse pas / est vide.
+    """
+    import json as _json
+    from django.contrib.gis.geos import GEOSGeometry
+
+    if not geojson_value or not isinstance(geojson_value, dict):
+        return None
+    gtype  = geojson_value.get("type")
+    coords = geojson_value.get("coordinates")
+    if not gtype or coords is None:
+        return None
+
+    if gtype == "LineString":
+        if not isinstance(coords, list) or len(coords) < 2:
+            return None
+    elif gtype == "Polygon":
+        if not isinstance(coords, list) or not coords:
+            return None
+        for ring in coords:
+            if not isinstance(ring, list):
+                return None
+            if ring and ring[0] != ring[-1]:
+                ring.append(ring[0])
+            if len(ring) < 4:
+                return None
+    # Autres types (MultiPolygon, etc.) : on tente le parse direct.
+
+    try:
+        g = GEOSGeometry(_json.dumps(geojson_value), srid=4326)
+        return None if g.empty else g
+    except Exception:
+        return None
+
+
 def _polygon_area_km2(geometry: list) -> float:
     if len(geometry) < 3:
         return 0.0
@@ -460,7 +516,10 @@ def _overpass_raw_fetch(query: str, stdout) -> dict | None:
                 url,
                 data={"data": query},
                 timeout=OVERPASS_TIMEOUT,
-                headers={"User-Agent": "GéoDash/1.0 (contact@geodash-ci.example.com)"},
+                headers={
+                    "User-Agent": OVERPASS_USER_AGENT,
+                    "Accept": "application/json",
+                },
             )
             resp.raise_for_status()
             data = resp.json()
@@ -689,6 +748,7 @@ def _build_road_defaults(el: dict, now) -> dict | None:
         "condition_score": score,
         "surface_type":    surface,
         "geojson":         geojson,
+        "geom":            _geojson_to_geom(geojson),
         "notes":           " | ".join(parts),
         "last_analyzed":   now,
     }
@@ -726,6 +786,7 @@ def _build_flood_defaults(el: dict, now) -> dict | None:
         "area_km2":     area_km2,
         "rainfall_mm":  0.0,
         "geojson":      geojson,
+        "geom":         _geojson_to_geom(geojson),
         "last_analyzed": now,
     }
 
@@ -756,6 +817,7 @@ def _build_vegetation_defaults(el: dict, now) -> dict | None:
         "coverage_percent":  round(ndvi * 100, 1),
         "change_vs_previous": 0.0,
         "geojson":           geojson,
+        "geom":              _geojson_to_geom(geojson),
         "last_analyzed":     now,
     }
 
@@ -764,17 +826,17 @@ _MODEL_CONFIG = {
     RoadSegment: {
         "builder":       _build_road_defaults,
         "update_fields": ["name", "condition_score", "status", "surface_type",
-                          "geojson", "notes", "last_analyzed"],
+                          "geojson", "geom", "notes", "last_analyzed"],
     },
     FloodRisk: {
         "builder":       _build_flood_defaults,
         "update_fields": ["name", "risk_level", "risk_score", "area_km2",
-                          "geojson", "last_analyzed"],
+                          "geojson", "geom", "last_analyzed"],
     },
     VegetationDensity: {
         "builder":       _build_vegetation_defaults,
         "update_fields": ["name", "ndvi_value", "density_class",
-                          "coverage_percent", "geojson", "last_analyzed"],
+                          "coverage_percent", "geojson", "geom", "last_analyzed"],
     },
 }
 
@@ -859,27 +921,87 @@ def save_vegetation(zone, elements, stdout):
 
 # ─── Génération d'alertes ─────────────────────────────────────────────────────
 
+def _geojson_centroid(geo):
+    """Centroïde approximé (lat, lng) à partir d'un GeoJSON.
+
+    Moyenne arithmétique des sommets — suffisant pour positionner une alerte
+    sur la carte. Supporte Point, LineString, MultiLineString, Polygon et
+    MultiPolygon. Retourne (None, None) si le GeoJSON est vide ou inattendu.
+    """
+    if not isinstance(geo, dict):
+        return (None, None)
+    gtype  = geo.get("type")
+    coords = geo.get("coordinates")
+    if not coords:
+        return (None, None)
+
+    pts = []
+    if gtype == "Point":
+        pts = [coords]
+    elif gtype == "LineString":
+        pts = coords
+    elif gtype == "MultiLineString":
+        for line in coords:
+            pts.extend(line)
+    elif gtype == "Polygon":
+        if coords and isinstance(coords[0], list):
+            pts = coords[0]
+    elif gtype == "MultiPolygon":
+        for poly in coords:
+            if poly and isinstance(poly[0], list):
+                pts.extend(poly[0])
+    else:
+        return (None, None)
+
+    valid = [p for p in pts
+             if isinstance(p, (list, tuple)) and len(p) >= 2
+             and isinstance(p[0], (int, float))
+             and isinstance(p[1], (int, float))]
+    if not valid:
+        return (None, None)
+
+    avg_lng = sum(p[0] for p in valid) / len(valid)
+    avg_lat = sum(p[1] for p in valid) / len(valid)
+    return (avg_lat, avg_lng)
+
+
+def _alert_coords(geojson, zone):
+    """Coords (lat, lng) du centroïde GeoJSON, fallback centre zone si absent."""
+    lat, lng = _geojson_centroid(geojson)
+    if lat is None or lng is None:
+        return (zone.lat_center, zone.lng_center)
+    return (lat, lng)
+
+
 def generate_alerts(zone) -> int:
+    """Génère/MAJ les alertes route + inondation pour `zone`.
+
+    Les coordonnées d'une alerte pointent sur le centroïde réel du tronçon
+    routier ou de la zone d'inondation concernée — plus sur le centre de la
+    Zone administrative — afin que `focusAlert` côté frontend zoome sur
+    l'objet réel et non sur le chef-lieu. `update_or_create` permet de réparer
+    les alertes déjà en base sans perdre le statut `is_read`.
+    """
     count = 0
-    now   = timezone.now()
 
     for road in (zone.roads
                  .filter(status__in=["critique", "ferme"])
                  .order_by("condition_score")[:3]):
-        _, created = Alert.objects.get_or_create(
+        lat, lng = _alert_coords(road.geojson, zone)
+        _, created = Alert.objects.update_or_create(
             zone=zone,
             title=f"Route dégradée : {road.name}",
             category="road",
-            is_read=False,
             defaults={
                 "message": (
                     f"Segment '{road.name}' — score {road.condition_score}/100 "
                     f"({road.get_status_display()}). Inspection recommandée."
                 ),
-                "severity":   "critical" if road.status == "ferme" else "danger",
-                "created_at": now,
-                "lat":        zone.lat_center,
-                "lng":        zone.lng_center,
+                "severity": "critical" if road.status == "ferme" else "danger",
+                "lat":      lat,
+                "lng":      lng,
+                "source_type": "road",
+                "source_id":   road.id,
             },
         )
         if created:
@@ -888,20 +1010,21 @@ def generate_alerts(zone) -> int:
     for flood in (zone.flood_risks
                   .filter(risk_level__in=["eleve", "critique"])
                   .order_by("-risk_score")[:2]):
-        _, created = Alert.objects.get_or_create(
+        lat, lng = _alert_coords(flood.geojson, zone)
+        _, created = Alert.objects.update_or_create(
             zone=zone,
             title=f"Risque inondation : {flood.name}",
             category="flood",
-            is_read=False,
             defaults={
                 "message": (
                     f"Zone '{flood.name}' — risque {flood.get_risk_level_display()}, "
                     f"score {flood.risk_score}/100."
                 ),
-                "severity":   "critical" if flood.risk_level == "critique" else "warning",
-                "created_at": now,
-                "lat":        zone.lat_center,
-                "lng":        zone.lng_center,
+                "severity": "critical" if flood.risk_level == "critique" else "warning",
+                "lat":      lat,
+                "lng":      lng,
+                "source_type": "flood",
+                "source_id":   flood.id,
             },
         )
         if created:
@@ -928,11 +1051,12 @@ class Command(BaseCommand):
             "--clear", action="store_true",
             help="Supprime les données existantes avant import.",
         )
+        # ── --type remplace --roads-only ────────────────────────────────────
         parser.add_argument(
-            "--roads-only", action="store_true",
-            help="Routes uniquement, ignore eau et végétation.",
+            "--type", type=str, default="all",
+            choices=["all", "routes", "eau", "vegetation"],
+            help="Type de données à importer (défaut: all).",
         )
-        # ── NOUVEAUX ARGUMENTS ──────────────────────────────────────────────
         parser.add_argument(
             "--delay", type=float, default=REQUEST_DELAY,
             help=f"Délai en secondes entre chaque zone (défaut: {REQUEST_DELAY}s).",
@@ -945,16 +1069,26 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         dry_run    = options["dry_run"]
         zone_code  = options["zone"]
-        roads_only = options["roads_only"]
+        data_type  = options["type"]
         delay      = options["delay"]
         batch_size = options["batch_size"]
 
         if dry_run:
             self.stdout.write(self.style.WARNING("DRY-RUN -- aucune ecriture en base\n"))
 
+        # ── Compteur d'étapes dynamique ───────────────────────────────────
+        steps = []
+        if data_type in ("all", "routes"):
+            steps.append("routes")
+        if data_type in ("all", "eau"):
+            steps.append("eau")
+        if data_type in ("all", "vegetation"):
+            steps.append("vegetation")
+        total_steps = len(steps)
+
         self.stdout.write(
-            f"Configuration : délai={delay}s, batch={batch_size} zones, "
-            f"pause_batch={BATCH_PAUSE}s\n"
+            f"Configuration : type={data_type}, délai={delay}s, "
+            f"batch={batch_size} zones, pause_batch={BATCH_PAUSE}s\n"
         )
 
         if not dry_run:
@@ -989,17 +1123,25 @@ class Command(BaseCommand):
             with transaction.atomic():
                 if zone_code:
                     for z in zones:
-                        z.roads.all().delete()
-                        z.flood_risks.all().delete()
-                        z.vegetation.all().delete()
-                        z.alerts.all().delete()
+                        if data_type in ("all", "routes"):
+                            z.roads.all().delete()
+                        if data_type in ("all", "eau"):
+                            z.flood_risks.all().delete()
+                        if data_type in ("all", "vegetation"):
+                            z.vegetation.all().delete()
+                        if data_type == "all":
+                            z.alerts.all().delete()
                 else:
-                    RoadSegment.objects.all().delete()
-                    FloodRisk.objects.all().delete()
-                    VegetationDensity.objects.all().delete()
-                    Alert.objects.filter(
-                        category__in=["road", "flood", "vegetation"]
-                    ).delete()
+                    if data_type in ("all", "routes"):
+                        RoadSegment.objects.all().delete()
+                    if data_type in ("all", "eau"):
+                        FloodRisk.objects.all().delete()
+                    if data_type in ("all", "vegetation"):
+                        VegetationDensity.objects.all().delete()
+                    if data_type == "all":
+                        Alert.objects.filter(
+                            category__in=["road", "flood", "vegetation"]
+                        ).delete()
             self.stdout.write("  Base nettoyee\n")
 
         totals = dict(rc=0, ru=0, fc=0, fu=0, vc=0, vu=0, alerts=0, errors=0)
@@ -1014,30 +1156,36 @@ class Command(BaseCommand):
             ))
 
             zone_bbox = make_bbox(zone.lat_center, zone.lng_center)
+            step_num  = 0
+            need_delay = False  # pour le délai inter-requêtes
 
-            # ── REQUÊTE 1 : Routes ────────────────────────────────────────
-            self.stdout.write("  [1/3] Requete routes...")
-            roads_data = overpass_fetch_roads(zone_bbox, self.stdout)
+            # ── REQUÊTE : Routes ──────────────────────────────────────────
+            roads_el = []
+            if data_type in ("all", "routes"):
+                step_num += 1
+                self.stdout.write(f"  [{step_num}/{total_steps}] Requete routes...")
+                roads_data = overpass_fetch_roads(zone_bbox, self.stdout)
 
-            if roads_data is None:
-                totals["errors"] += 1
-                self.stdout.write(self.style.ERROR(
-                    f"  Overpass inaccessible pour {zone.name} -- zone ignoree."
-                ))
-                _inter_zone_delay(self.stdout, delay)
-                continue
+                if roads_data is None:
+                    totals["errors"] += 1
+                    self.stdout.write(self.style.ERROR(
+                        f"  Overpass inaccessible pour {zone.name} -- on continue."
+                    ))
+                else:
+                    roads_el = [
+                        el for el in roads_data.get("elements", [])
+                        if el.get("type") == "way" and classify_element(el) == "road"
+                    ]
+                    self.stdout.write(f"  → {len(roads_el)} routes trouvees")
+                    need_delay = True
 
-            roads_el = [
-                el for el in roads_data.get("elements", [])
-                if el.get("type") == "way" and classify_element(el) == "road"
-            ]
-            self.stdout.write(f"  → {len(roads_el)} routes trouvees")
-
-            # ── REQUÊTE 2 : Eau ───────────────────────────────────────────
+            # ── REQUÊTE : Eau ─────────────────────────────────────────────
             flood_el = []
-            if not roads_only:
-                _inter_query_delay()
-                self.stdout.write("  [2/3] Requete zones eau...")
+            if data_type in ("all", "eau"):
+                if need_delay:
+                    _inter_query_delay()
+                step_num += 1
+                self.stdout.write(f"  [{step_num}/{total_steps}] Requete zones eau...")
                 water_data = overpass_fetch_water(zone_bbox, self.stdout)
                 if water_data:
                     flood_el = [
@@ -1047,12 +1195,15 @@ class Command(BaseCommand):
                 else:
                     self.stdout.write(self.style.WARNING("  Eau : echec requete, on continue"))
                 self.stdout.write(f"  → {len(flood_el)} zones eau trouvees")
+                need_delay = True
 
-            # ── REQUÊTE 3 : Végétation ────────────────────────────────────
+            # ── REQUÊTE : Végétation ──────────────────────────────────────
             veg_el = []
-            if not roads_only:
-                _inter_query_delay()
-                self.stdout.write("  [3/3] Requete vegetation...")
+            if data_type in ("all", "vegetation"):
+                if need_delay:
+                    _inter_query_delay()
+                step_num += 1
+                self.stdout.write(f"  [{step_num}/{total_steps}] Requete vegetation...")
                 veg_data = overpass_fetch_vegetation(zone_bbox, self.stdout)
                 if veg_data:
                     veg_el = [
@@ -1067,18 +1218,20 @@ class Command(BaseCommand):
                 _inter_zone_delay(self.stdout, delay)
                 continue
 
-            # ── Sauvegarde ────────────────────────────────────────────────
-            try:
-                c, u = save_roads(zone, roads_el, self.stdout)
-                totals["rc"] += c
-                totals["ru"] += u
-                self.stdout.write(f"  Routes : {c} creees, {u} mises a jour")
-            except Exception as e:
-                totals["errors"] += 1
-                logger.exception("Erreur save_roads -- zone %s", zone.code)
-                self.stdout.write(self.style.ERROR(f"  Routes KO : {e}"))
+            # ── Sauvegarde : Routes ───────────────────────────────────────
+            if data_type in ("all", "routes"):
+                try:
+                    c, u = save_roads(zone, roads_el, self.stdout)
+                    totals["rc"] += c
+                    totals["ru"] += u
+                    self.stdout.write(f"  Routes : {c} creees, {u} mises a jour")
+                except Exception as e:
+                    totals["errors"] += 1
+                    logger.exception("Erreur save_roads -- zone %s", zone.code)
+                    self.stdout.write(self.style.ERROR(f"  Routes KO : {e}"))
 
-            if not roads_only:
+            # ── Sauvegarde : Inondations ──────────────────────────────────
+            if data_type in ("all", "eau"):
                 try:
                     c, u = save_flood_risks(zone, flood_el, self.stdout)
                     totals["fc"] += c
@@ -1089,6 +1242,8 @@ class Command(BaseCommand):
                     logger.exception("Erreur save_flood_risks -- zone %s", zone.code)
                     self.stdout.write(self.style.ERROR(f"  Inondations KO : {e}"))
 
+            # ── Sauvegarde : Végétation ───────────────────────────────────
+            if data_type in ("all", "vegetation"):
                 try:
                     c, u = save_vegetation(zone, veg_el, self.stdout)
                     totals["vc"] += c
@@ -1099,6 +1254,8 @@ class Command(BaseCommand):
                     logger.exception("Erreur save_vegetation -- zone %s", zone.code)
                     self.stdout.write(self.style.ERROR(f"  Vegetation KO : {e}"))
 
+            # ── Alertes (uniquement si all ou si routes+eau concernés) ────
+            if data_type == "all":
                 try:
                     n = generate_alerts(zone)
                     totals["alerts"] += n
@@ -1113,16 +1270,20 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(f"\n{'=' * 52}"))
         self.stdout.write(self.style.SUCCESS("Import termine"))
         if not dry_run:
-            self.stdout.write(
-                f"  Routes      -- creees : {totals['rc']}, mises a jour : {totals['ru']}"
-            )
-            self.stdout.write(
-                f"  Inondations -- creees : {totals['fc']}, mises a jour : {totals['fu']}"
-            )
-            self.stdout.write(
-                f"  Vegetation  -- creees : {totals['vc']}, mises a jour : {totals['vu']}"
-            )
-            self.stdout.write(f"  Alertes generees     : {totals['alerts']}")
+            if data_type in ("all", "routes"):
+                self.stdout.write(
+                    f"  Routes      -- creees : {totals['rc']}, mises a jour : {totals['ru']}"
+                )
+            if data_type in ("all", "eau"):
+                self.stdout.write(
+                    f"  Inondations -- creees : {totals['fc']}, mises a jour : {totals['fu']}"
+                )
+            if data_type in ("all", "vegetation"):
+                self.stdout.write(
+                    f"  Vegetation  -- creees : {totals['vc']}, mises a jour : {totals['vu']}"
+                )
+            if data_type == "all":
+                self.stdout.write(f"  Alertes generees     : {totals['alerts']}")
             if totals["errors"]:
                 self.stdout.write(self.style.WARNING(
                     f"  {totals['errors']} zone(s) en erreur -- voir les logs Django."

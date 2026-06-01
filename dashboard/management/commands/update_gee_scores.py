@@ -692,53 +692,48 @@ def _update_roads(zone, ee, region, dry_run, stdout):
 
 def _fix_alert_coords(zone, dry_run, stdout):
     """
-    Remplace les coordonnées des alertes (centroïde zone) par le centroïde
-    réel de la géométrie de l'objet concerné.
+    Repositionne chaque alerte sur le centroïde réel de SON objet source,
+    résolu par référence directe (source_type / source_id) — sans aucune
+    ambiguïté de nom.
+
+    Les alertes encore dépourvues de lien source (source_id NULL) sont ignorées
+    ici : elles sont réparées une fois pour toutes par la commande dédiée
+    `repair_alert_sources`, qui renseigne ensuite leur source_id.
 
     Seules les alertes dont les coordonnées changent significativement
-    (> 0.0001°, soit ~11m) sont mises à jour.
+    (> 0.0001°, soit ~11 m) sont mises à jour.
 
     Retourne le nombre d'alertes corrigées.
     """
-    alerts = list(Alert.objects.filter(zone=zone, is_read=False))
+    alerts = list(
+        Alert.objects.filter(zone=zone, is_read=False)
+        .exclude(source_id__isnull=True)
+    )
     if not alerts:
         return 0
 
-    # Index rapide des objets par nom pour chaque catégorie
-    road_idx = {
-        r.name: r
-        for r in RoadSegment.objects.filter(zone=zone).only("name", "geojson")
+    # Pré-chargement des géométries par (type, id) — résolution non ambiguë
+    geo = {}
+    model_by_type = {
+        "road": RoadSegment,
+        "flood": FloodRisk,
+        "vegetation": VegetationDensity,
     }
-    flood_idx = {
-        f.name: f
-        for f in FloodRisk.objects.filter(zone=zone).only("name", "geojson")
-    }
-    veg_idx = {
-        v.name: v
-        for v in VegetationDensity.objects.filter(zone=zone).only("name", "geojson")
-    }
-
-    TITLE_PREFIXES = {
-        "road": ("Route dégradée : ", road_idx),
-        "flood": ("Risque inondation : ", flood_idx),
-        "vegetation": ("Végétation dégradée : ", veg_idx),
-    }
+    for source_type, model in model_by_type.items():
+        ids = [a.source_id for a in alerts if a.source_type == source_type]
+        if not ids:
+            continue
+        for obj in model.objects.filter(id__in=ids).only("id", "geojson"):
+            geo[(source_type, obj.id)] = obj.geojson
 
     to_update = []
 
     for alert in alerts:
-        cfg = TITLE_PREFIXES.get(alert.category)
-        if cfg is None:
+        geojson = geo.get((alert.source_type, alert.source_id))
+        if not geojson:
             continue
 
-        prefix, idx = cfg
-        name = alert.title.replace(prefix, "", 1)
-        obj = idx.get(name)
-
-        if obj is None or not getattr(obj, "geojson", None):
-            continue
-
-        lat, lng = _geometry_centroid(obj.geojson)
+        lat, lng = _geometry_centroid(geojson)
         if lat is None or lng is None:
             continue
 

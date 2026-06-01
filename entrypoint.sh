@@ -56,6 +56,52 @@ else
   echo "[GéoDash] Base déjà peuplée ($ZONE_COUNT zones) — pas d'import."
 fi
 
+# ── 3.4 Fix encodage (idempotent via marqueur SQL) ──
+if [ -f /app/fix_encoding.sql ]; then
+  echo "[GéoDash] Application du fix encodage (idempotent)..."
+  PGCLIENTENCODING=UTF8 PGPASSWORD="$POSTGRES_PASSWORD" \
+    psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" \
+         -v ON_ERROR_STOP=1 -f /app/fix_encoding.sql \
+    && echo "[GéoDash] Fix encodage OK." \
+    || echo "[GéoDash] ATTENTION : le fix encodage a échoué (voir log ci-dessus)."
+else
+  echo "[GéoDash] Pas de fix_encoding.sql trouvé — skip."
+fi
+
+# ── 3.5 Création superuser (idempotente) ──
+if [ -n "$DJANGO_SUPERUSER_USERNAME" ] && [ -n "$DJANGO_SUPERUSER_PASSWORD" ]; then
+  echo "[GéoDash] Vérification superuser..."
+  EXISTS=$(python manage.py shell -c "from django.contrib.auth import get_user_model; print(get_user_model().objects.filter(username='$DJANGO_SUPERUSER_USERNAME').exists())" 2>/dev/null | tail -1)
+  if [ "$EXISTS" = "True" ]; then
+    echo "[GéoDash] Superuser '$DJANGO_SUPERUSER_USERNAME' déjà présent."
+  else
+    echo "[GéoDash] Création superuser '$DJANGO_SUPERUSER_USERNAME'..."
+    python manage.py createsuperuser --noinput \
+      --username "$DJANGO_SUPERUSER_USERNAME" \
+      --email "${DJANGO_SUPERUSER_EMAIL:-admin@geodash.local}" 2>&1 || echo "[GéoDash] Création superuser échouée."
+  fi
+fi
+
+# ── DEBUG temporaire : ce que l'env du conteneur contient ──
+echo "[DEBUG ENV] GEE_SERVICE_ACCOUNT='${GEE_SERVICE_ACCOUNT}'"
+echo "[DEBUG ENV] GEE_KEY_FILE='${GEE_KEY_FILE}'"
+echo "[DEBUG ENV] GEE_PROJECT='${GEE_PROJECT}'"
+echo "[DEBUG ENV] GEE_KEY_BASE64 length=${#GEE_KEY_BASE64}"
+echo "[DEBUG ENV] /app/gee_credentials.json exists: $([ -f /app/gee_credentials.json ] && echo YES || echo NO)"
+echo "[DEBUG ENV] /app/gee_credentials.json size: $(stat -c%s /app/gee_credentials.json 2>/dev/null || echo N/A)"
+
+# ── DEBUG Python : ce que Django voit ──
+python -c "
+import os, django
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+django.setup()
+from django.conf import settings
+print(f'[DEBUG DJANGO] GEE_SERVICE_ACCOUNT={settings.GEE_SERVICE_ACCOUNT!r}')
+print(f'[DEBUG DJANGO] GEE_KEY_FILE={settings.GEE_KEY_FILE!r}')
+print(f'[DEBUG DJANGO] GEE_PROJECT={settings.GEE_PROJECT!r}')
+print(f'[DEBUG DJANGO] key_file_exists={os.path.isfile(settings.GEE_KEY_FILE) if settings.GEE_KEY_FILE else False}')
+"
+
 # ── 4. Lancer Gunicorn ──
 echo "[GéoDash] Démarrage Gunicorn..."
 exec gunicorn config.wsgi:application \

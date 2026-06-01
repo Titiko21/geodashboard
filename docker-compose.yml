@@ -1,8 +1,14 @@
 services:
 
-  # ── Base de données PostgreSQL ───────────────────────────────────────────────
+  # ── Base de données PostgreSQL + PostGIS ─────────────────────────────────────
+  # Image officielle postgis/postgis basée sur postgres:15-alpine — format de
+  # données identique, le volume existant est compatible. L'extension PostGIS
+  # est activée par docker/postgres-init/00-enable-postgis.sql sur les NOUVEAUX
+  # volumes uniquement. Pour un volume existant, lancer manuellement :
+  #   docker compose exec db psql -U $POSTGRES_USER -d $POSTGRES_DB \
+  #     -c "CREATE EXTENSION IF NOT EXISTS postgis;"
   db:
-    image: postgres:15-alpine
+    image: postgis/postgis:15-3.4-alpine
     restart: unless-stopped
     ports:
       - "5432:5432"
@@ -12,21 +18,88 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
+  # ── Keycloak (SSO / OIDC) ────────────────────────────────────────────────────
+  # Activé via le profil "sso" — la stack reste démarrable sans Keycloak.
+  #   docker compose --profile sso up
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    restart: unless-stopped
+    profiles: ["sso"]
+    # --import-realm rejoue les fichiers de /opt/keycloak/data/import/ au boot
+    # → realm "geodash" (client + rôles + user demo) provisionné sans clic.
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_DB:                  postgres
+      KC_DB_URL:              jdbc:postgresql://db:5432/keycloak
+      KC_DB_USERNAME:         ${POSTGRES_USER}
+      KC_DB_PASSWORD:         ${POSTGRES_PASSWORD}
+      KEYCLOAK_ADMIN:         ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_HTTP_ENABLED:        "true"
+      KC_HEALTH_ENABLED:      "true"
+      KC_HOSTNAME_STRICT:     "false"
+      # KC25 : KC_HOSTNAME accepte un hostname OU une URL. URL complète
+      # (http://localhost:8080) déclenche un mismatch port quand le browser
+      # vient via Docker Desktop port-forward → Vert.x ferme la connexion.
+      # On garde le hostname seul + KC_HTTP_PORT pour fixer l'issuer port.
+      # Le port 8080 est bloque cote Windows (reservation systeme silencieuse).
+      # On expose Keycloak sur 8090 cote host, mais le container ecoute 8080
+      # en interne. KC_HTTP_PORT fixe le port dans l'issuer URL pour matcher
+      # ce que le browser voit.
+      KC_HOSTNAME:            localhost
+      KC_HTTP_PORT:           "8090"
+      # Sans HTTPS en dev, on désactive l'option qui pousse les redirects
+      # admin en https.
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+    ports:
+      - "8090:8090"
+      - "9000:9000"  # endpoint /health/ready (management)
+    volumes:
+      - ./docker/keycloak/import:/opt/keycloak/data/import:ro
+    # DNS publics — contournement des soucis de résolution Docker Desktop (Windows)
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    depends_on:
+      db:
+        condition: service_healthy
+    # Le port 9000 sert /health/ready. Bash de l'image KC25 ne fournit pas
+    # curl ; on utilise /dev/tcp pour rester sans dépendance externe.
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && echo -e 'GET /health/ready HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q '200 OK' <&3 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+
   # ── Application Django ───────────────────────────────────────────────────────
   web:
-    build: .
+    # build: en local pour intégrer les modifs (mozilla-django-oidc, middleware,
+    # gee_integration). En prod, basculer sur image: tity21/geedashboard:<tag>
+    # une fois l'image publiée.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: geedashboard-local:dev
     restart: unless-stopped
     env_file: .env
     volumes:
       - O:/Confidentiel/private-key.json:/app/gee_credentials.json:ro
     ports:
       - "8000:8000"
+    # DNS publics — corrige "Failed to resolve oauth2.googleapis.com" qui empêche
+    # l'authentification GEE (Docker Desktop Windows utilise parfois un resolver
+    # WSL2 qui échoue silencieusement sur les domaines Google).
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     depends_on:
       db:
         condition: service_healthy
@@ -36,15 +109,35 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-    command: >
-      sh -c "
-        echo '── Migration ──' &&
-        python manage.py migrate --noinput &&
-        echo '── Création des zones ──' &&
-        python manage.py populate_geodata --dry-run 2>&1 | head -5 &&
-        echo '── Lancement du serveur ──' &&
-        python manage.py runserver 0.0.0.0:8000
-      "
+    entrypoint: ["/app/entrypoint.sh"]
+    command: []
+
+  # ── Scheduler (jobs récurrents OSM/GEE) ──────────────────────────────────────
+  # Réutilise l'image `web` (build identique). Tourne APScheduler en
+  # BlockingScheduler dans le process principal — pas de cron système.
+  # Jobs : populate_geodata (dimanche 03:00), update_gee_scores (04:00 tous les jours).
+  # Désactivable via SCHEDULER_DISABLED=1 dans .env.
+  # Opt-in via profile : `docker compose --profile scheduler up`
+  scheduler:
+    profiles: ["scheduler"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: geedashboard-local:dev
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - O:/Confidentiel/private-key.json:/app/gee_credentials.json:ro
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    depends_on:
+      db:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    entrypoint: []
+    command: ["python", "manage.py", "run_scheduler"]
 
 volumes:
   postgres_data:

@@ -23,7 +23,9 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django.contrib.gis',
     'dashboard',
+    'admin_divisions',
 ]
 
 MIDDLEWARE = [
@@ -57,10 +59,12 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'config.wsgi.application'
 
-# ── Base de données PostgreSQL ────────────────────────────────────────────────
+# ── Base de données PostgreSQL + PostGIS ──────────────────────────────────────
+# Backend GIS requis pour les GeometryField (étape 2.3+). Le backend postgis
+# reste 100% compatible avec les requêtes ORM standard sur les modèles non-GIS.
 DATABASES = {
     'default': {
-        'ENGINE':   'django.db.backends.postgresql',
+        'ENGINE':   'django.contrib.gis.db.backends.postgis',
         'NAME':     os.environ.get('POSTGRES_DB'),
         'USER':     os.environ.get('POSTGRES_USER'),
         'PASSWORD': os.environ.get('POSTGRES_PASSWORD'),
@@ -84,6 +88,71 @@ USE_TZ = True
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# ── Authentification SSO Keycloak (OIDC) ──────────────────────────────────────
+# Activable via KEYCLOAK_ENABLED=true. Désactivé par défaut pour préserver le
+# fonctionnement local sans dépendance externe.
+#
+# En Docker, le navigateur et le conteneur Django ne joignent pas Keycloak par
+# la même URL : on sépare donc KEYCLOAK_URL (interne, token/jwks) et
+# KEYCLOAK_PUBLIC_URL (browser-facing, authorize/logout).
+
+KEYCLOAK_ENABLED = os.environ.get('KEYCLOAK_ENABLED', 'False').lower() in ('true', '1', 'yes')
+
+if KEYCLOAK_ENABLED:
+    KEYCLOAK_URL        = os.environ['KEYCLOAK_URL'].rstrip('/')
+    KEYCLOAK_PUBLIC_URL = os.environ.get('KEYCLOAK_PUBLIC_URL', KEYCLOAK_URL).rstrip('/')
+    KEYCLOAK_REALM      = os.environ['KEYCLOAK_REALM']
+
+    _kc_internal = f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect"
+    _kc_public   = f"{KEYCLOAK_PUBLIC_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect"
+
+    INSTALLED_APPS += ['mozilla_django_oidc']
+
+    AUTHENTICATION_BACKENDS = [
+        'dashboard.auth.KeycloakOIDCBackend',
+        'django.contrib.auth.backends.ModelBackend',  # superuser local pour /admin/
+    ]
+
+    MIDDLEWARE += [
+        'mozilla_django_oidc.middleware.SessionRefresh',
+        'dashboard.middleware.LoginRequiredMiddleware',
+    ]
+
+    OIDC_RP_CLIENT_ID     = os.environ['OIDC_RP_CLIENT_ID']
+    OIDC_RP_CLIENT_SECRET = os.environ['OIDC_RP_CLIENT_SECRET']
+    OIDC_RP_SIGN_ALGO     = 'RS256'
+    OIDC_RP_SCOPES        = 'openid email profile'
+    OIDC_USE_PKCE         = True
+
+    # Endpoints navigateur (authorize)
+    OIDC_OP_AUTHORIZATION_ENDPOINT = f"{_kc_public}/auth"
+    # Endpoints serveur (token, userinfo, jwks) — appelés depuis Django
+    OIDC_OP_TOKEN_ENDPOINT    = f"{_kc_internal}/token"
+    OIDC_OP_USER_ENDPOINT     = f"{_kc_internal}/userinfo"
+    OIDC_OP_JWKS_ENDPOINT     = f"{_kc_internal}/certs"
+
+    # Logout SSO : helper construit l'URL avec id_token_hint
+    OIDC_OP_LOGOUT_URL_METHOD     = 'dashboard.auth.keycloak_logout'
+    KEYCLOAK_LOGOUT_ENDPOINT_PUBLIC = f"{_kc_public}/logout"
+    OIDC_STORE_ID_TOKEN = True
+    OIDC_STORE_ACCESS_TOKEN = True
+
+    # Renouvellement silencieux des tokens (mozilla SessionRefresh)
+    OIDC_RENEW_ID_TOKEN_EXPIRY_SECONDS = 15 * 60
+
+    LOGIN_URL           = '/oidc/authenticate/'
+    LOGIN_REDIRECT_URL  = '/'
+    LOGOUT_REDIRECT_URL = '/'
+
+    # Hardening cookies / sessions (actif en prod uniquement)
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = 'Lax'
+    CSRF_COOKIE_SAMESITE    = 'Lax'
+    if not DEBUG:
+        SESSION_COOKIE_SECURE = True
+        CSRF_COOKIE_SECURE    = True
+        SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # ── Google Earth Engine ───────────────────────────────────────────────────────
 

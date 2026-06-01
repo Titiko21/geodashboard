@@ -1,0 +1,42 @@
+# docker-compose.override.yml — Mode dev local
+# Activé automatiquement par `docker compose up`. Non-versionné en prod
+# (laisser ce fichier en dev uniquement, ou l'ajouter à .gitignore selon
+# votre politique). Override appliqué au-dessus de docker-compose.yml.
+#
+# Effets :
+#   - Bind mount du code projet → /app : modifs Python/JS visibles sans rebuild.
+#   - Entrypoint personnalisé : migrate + runserver 0.0.0.0:8000 (avec auto-reload).
+#   - DEBUG forcé à True quel que soit le contenu de .env.
+#   - Le mount fichier gee_credentials.json reste prioritaire sur le bind mount
+#     du dossier (mount plus spécifique gagne).
+#   - L'entrypoint.sh original (gunicorn + import dump + fix encoding) est
+#     bypassé : la base est déjà peuplée, pas besoin de rejouer ces étapes.
+
+services:
+  web:
+    volumes:
+      - .:/app
+      - O:/Confidentiel/private-key.json:/app/gee_credentials.json:ro
+    environment:
+      DJANGO_DEBUG: "True"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    entrypoint: []
+    command:
+      - sh
+      - -c
+      - |
+        echo "[GéoDash dev] Migrations Django..."
+        python manage.py migrate --noinput
+        echo "[GéoDash dev] Démarrage runserver sur 0.0.0.0:8000..."
+        exec python manage.py runserver 0.0.0.0:8000
+
+  # Bind mount du code → reload manuel du scheduler après chaque modif
+  # (APScheduler ne fait pas d'auto-reload comme runserver).
+  scheduler:
+    volumes:
+      - .:/app
+      - O:/Confidentiel/private-key.json:/app/gee_credentials.json:ro
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
