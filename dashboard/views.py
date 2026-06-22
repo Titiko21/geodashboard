@@ -830,54 +830,59 @@ def api_admin_divisions(request):
     """
     Renvoie un GeoJSON FeatureCollection des entités du découpage admin.
 
-    GET /api/admin/divisions/?level=district     (défaut)
-                              level=region
-                              level=all          (district + région ensemble)
+    GET /api/admin/divisions/?level=<niveau>
+        niveaux : district (défaut), region, departement, sousprefecture,
+                  ville, commune, all.
 
-    Chaque feature porte dans ses `properties` : level, code, name, et selon
-    le cas is_autonomous (district) ou district (parent d'une région).
+    Chaque feature porte dans `properties` : level, code, name + le parent
+    pertinent (is_autonomous pour district, district/ville pour les autres).
+    Seules les entités dotées d'une géométrie sont renvoyées (clé pour les
+    couches cliquables : on ne dessine que ce qui a un polygone).
     """
-    from admin_divisions.models import District, Region
+    from admin_divisions.models import (
+        Commune, Departement, District, Region, SousPrefecture, Ville,
+    )
+
+    # level → (Model, select_related, fonction de propriétés "parent")
+    LEVELS = {
+        "district":       (District, (), lambda o: {"is_autonomous": o.is_autonomous}),
+        "region":         (Region, ("district",), lambda o: {"district": o.district.name}),
+        "departement":    (Departement, ("district",), lambda o: {"district": o.district.name}),
+        "sousprefecture": (SousPrefecture, ("departement",), lambda o: {"departement": o.departement.name}),
+        "ville":          (Ville, ("district",), lambda o: {"district": o.district.name}),
+        "commune":        (Commune, ("district", "ville"), lambda o: {
+                               "district": o.district.name,
+                               "ville":    o.ville.name if o.ville_id else None,
+                           }),
+    }
 
     level = request.GET.get("level", "district")
-    if level not in ("district", "region", "all"):
+    if level == "all":
+        wanted = list(LEVELS)
+    elif level in LEVELS:
+        wanted = [level]
+    else:
         return JsonResponse(
-            {"error": "level doit être 'district', 'region' ou 'all'."},
+            {"error": "level invalide. Attendu : " + ", ".join(list(LEVELS) + ["all"])},
             status=400,
         )
 
     features = []
-
-    if level in ("district", "all"):
-        for d in District.objects.filter(geom__isnull=False):
+    for lv in wanted:
+        Model, related, parent_props = LEVELS[lv]
+        qs = Model.objects.filter(geom__isnull=False)
+        if related:
+            qs = qs.select_related(*related)
+        for o in qs:
+            props = {"level": lv, "code": o.code, "name": o.name}
+            props.update(parent_props(o))
             features.append({
                 "type": "Feature",
-                "properties": {
-                    "level":         "district",
-                    "code":          d.code,
-                    "name":          d.name,
-                    "is_autonomous": d.is_autonomous,
-                },
-                "geometry": json.loads(d.geom.geojson),
+                "properties": props,
+                "geometry": json.loads(o.geom.geojson),
             })
 
-    if level in ("region", "all"):
-        for r in Region.objects.filter(geom__isnull=False).select_related("district"):
-            features.append({
-                "type": "Feature",
-                "properties": {
-                    "level":    "region",
-                    "code":     r.code,
-                    "name":     r.name,
-                    "district": r.district.name,
-                },
-                "geometry": json.loads(r.geom.geojson),
-            })
-
-    return JsonResponse({
-        "type":     "FeatureCollection",
-        "features": features,
-    })
+    return JsonResponse({"type": "FeatureCollection", "features": features})
 
 
 # ── API — Occupation des sols (ESA WorldCover via GEE) ────────────────────────

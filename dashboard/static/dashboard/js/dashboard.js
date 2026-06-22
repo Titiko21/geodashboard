@@ -325,12 +325,21 @@ function initMap(lat, lng) {
     }, 150);
   });
 
-  /* Chargement async des géométries (remplace l'injection inline ancien
-     map_data_json — peut peser plusieurs Mo selon la zone). */
-  _loadMapData(_activeZoneCode);
+  /* Chargement async des géométries. SANS zone sélectionnée, on NE charge
+     PAS toutes les données (≈128k routes = page figée) : on laisse
+     l'utilisateur cliquer une commune pour voir uniquement SES données. */
+  if (_activeZoneCode) {
+    _loadMapData(_activeZoneCode);
+  } else {
+    _hideOverlay();
+  }
 
   /* Markers communes (cliquables, popup détaillé) */
   loadZoneMarkers();
+
+  /* Frontières de communes cliquables sur le fond de carte :
+     clic → recharge la carte filtrée à cette seule commune. */
+  _loadClickableZones();
 
   /* GEE — overlays NDVI/SAR : opt-in via chips (toggleOverlay).
      Pas de chargement automatique pour ne pas saturer la carte au boot
@@ -349,8 +358,10 @@ function _refreshActiveOverlays() {
 
 /* Charge les géométries depuis /api/map-data/ et les passe au rendu Leaflet.
    Appelé au boot et à chaque changement de zone. */
-function _loadMapData(zoneCode) {
-  var url = '/api/map-data/' + (zoneCode ? '?zone=' + encodeURIComponent(zoneCode) : '');
+function _loadMapData(zoneCode, adminFilter) {
+  var qs = adminFilter ? ('?admin=' + encodeURIComponent(adminFilter))
+         : (zoneCode ? ('?zone=' + encodeURIComponent(zoneCode)) : '');
+  var url = '/api/map-data/' + qs;
   return fetch(url, {
     headers:     _apiHeaders(),
     redirect:    'manual',
@@ -414,6 +425,11 @@ function _hideOverlay() {
 
 function _renderData(data) {
   if (!data || !map) return;
+  // Idempotent : on vide les couches avant de re-rendre — indispensable au
+  // filtrage par zone EN PLACE (clic commune) sans rechargement de page.
+  if (lRoads)  lRoads.clearLayers();
+  if (lFloods) lFloods.clearLayers();
+  if (lVeg)    lVeg.clearLayers();
   var n = 0;
   _allBounds = [];
 
@@ -1282,6 +1298,117 @@ function _loadAdminBoundariesOverlay() {
       if (err === 'session') return;
       console.warn('[Admin boundaries] échec :', err);
     });
+}
+
+
+/* ══════════════════════════════════════════════════════════
+   ZONES CLIQUABLES (communes) — frontières dessinées sur le fond
+   de carte. Clic sur une commune → /api/map-data/?admin=commune:CODE
+   (filtre ST_Intersects côté serveur) : seules SES données s'affichent.
+══════════════════════════════════════════════════════════ */
+let lZones = null;        // L.geoJSON des polygones de communes
+let _zoneSelCode = null;  // code de la commune sélectionnée (ou null)
+
+var _ZONE_STYLE = {
+  base:     { color: '#2563eb', weight: 1.2, opacity: 0.55, fillColor: '#2563eb', fillOpacity: 0.04 },
+  hover:    { color: '#1d4ed8', weight: 2.2, opacity: 0.95, fillOpacity: 0.12 },
+  selected: { color: '#dc2626', weight: 3,   opacity: 1,    fillColor: '#dc2626', fillOpacity: 0.07 },
+  dimmed:   { color: '#94a3b8', weight: 0.8, opacity: 0.30, fillOpacity: 0.02 },
+};
+
+function _zoneStyleFor(code) {
+  if (_zoneSelCode === null) return _ZONE_STYLE.base;
+  return code === _zoneSelCode ? _ZONE_STYLE.selected : _ZONE_STYLE.dimmed;
+}
+
+function _loadClickableZones() {
+  if (!map || !_mapReady) return Promise.resolve();
+  return fetch('/api/admin/divisions/?level=commune', {
+    headers: _apiHeaders(), credentials: 'same-origin', redirect: 'manual',
+  })
+    .then(function (r) {
+      if (r.type === 'opaqueredirect' || r.status === 401 || r.status === 403) return Promise.reject('session');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function (data) {
+      if (!data || !data.features || !data.features.length) return;
+      if (lZones) { map.removeLayer(lZones); lZones = null; }
+      lZones = L.geoJSON(data, {
+        style: function (f) { return _zoneStyleFor(f.properties.code); },
+        onEachFeature: function (feature, layer) {
+          var p = feature.properties;
+          layer.bindTooltip(p.name, { sticky: true, direction: 'center' });
+          layer.on('mouseover', function () {
+            if (_zoneSelCode !== p.code) layer.setStyle(_ZONE_STYLE.hover);
+          });
+          layer.on('mouseout', function () { layer.setStyle(_zoneStyleFor(p.code)); });
+          layer.on('click', function (e) {
+            L.DomEvent.stop(e);
+            _selectZone(p, layer);
+          });
+        },
+      }).addTo(map);
+      // Sous les routes : un clic sur une route ouvre son popup, un clic dans
+      // le vide d'une commune sélectionne la zone.
+      lZones.bringToBack();
+    })
+    .catch(function (err) {
+      if (err === 'session') return;
+      console.warn('[Zones] échec :', err);
+    });
+}
+
+function _selectZone(props, layer) {
+  _zoneSelCode = props.code;
+  if (lZones) lZones.eachLayer(function (l) {
+    if (l.feature && l.feature.properties) l.setStyle(_zoneStyleFor(l.feature.properties.code));
+  });
+  _loadMapData(null, 'commune:' + props.code);   // données de cette seule commune
+  try { map.fitBounds(layer.getBounds(), { padding: [24, 24], maxZoom: 14 }); } catch (e) {}
+  _showZoneBanner(props.name);
+}
+
+function _clearZoneSel() {
+  _zoneSelCode = null;
+  if (lZones) lZones.eachLayer(function (l) { l.setStyle(_ZONE_STYLE.base); });
+  _loadMapData();          // toutes les données
+  _hideZoneBanner();
+}
+
+let _zoneBanner = null;
+function _showZoneBanner(name) {
+  if (!_zoneBanner) {
+    var Ctrl = L.Control.extend({
+      options: { position: 'topleft' },
+      onAdd: function () {
+        var div = L.DomUtil.create('div');
+        div.style.cssText = 'background:rgba(255,255,255,.96);padding:6px 10px;border-radius:8px;'
+          + 'box-shadow:0 1px 5px rgba(0,0,0,.25);font:13px/1.2 system-ui,sans-serif;color:#0f172a;'
+          + 'display:flex;align-items:center;gap:10px;';
+        L.DomEvent.disableClickPropagation(div);
+        return div;
+      },
+    });
+    _zoneBanner = new Ctrl();
+    _zoneBanner.addTo(map);
+  }
+  var el = _zoneBanner.getContainer();
+  el.textContent = '';
+  var lbl = document.createElement('span');
+  lbl.appendChild(document.createTextNode('Zone : '));
+  var strong = document.createElement('strong'); strong.textContent = name;
+  lbl.appendChild(strong);
+  var btn = document.createElement('button');
+  btn.type = 'button'; btn.textContent = 'Tout afficher';
+  btn.style.cssText = 'cursor:pointer;border:0;background:#dc2626;color:#fff;'
+    + 'padding:3px 9px;border-radius:6px;font-size:12px;';
+  btn.onclick = _clearZoneSel;
+  el.appendChild(lbl); el.appendChild(btn);
+  el.style.display = 'flex';
+}
+function _hideZoneBanner() {
+  if (_zoneBanner && _zoneBanner.getContainer()) _zoneBanner.getContainer().style.display = 'none';
 }
 
 
