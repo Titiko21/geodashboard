@@ -1883,16 +1883,16 @@ function applySettings() {
 
 var TILE_CONFIGS = {
   dark: {
-    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-    subdomains: 'abcd', label: 'CartoDB Sombre', maxNativeZoom: 18, maxZoom: 22,
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    subdomains: 'abcd', label: 'CartoDB Sombre', maxNativeZoom: 20, maxZoom: 22,
   },
   light: {
-    url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
-    subdomains: 'abcd', label: 'CartoDB Clair', maxNativeZoom: 18, maxZoom: 22,
+    url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+    subdomains: 'abcd', label: 'CartoDB Clair', maxNativeZoom: 20, maxZoom: 22,
   },
   osm: {
-    url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
-    subdomains: 'abcd', label: 'OpenStreetMap', maxNativeZoom: 18, maxZoom: 22,
+    url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+    subdomains: 'abcd', label: 'Plan (OSM)', maxNativeZoom: 20, maxZoom: 22,
   },
   topo: {
     url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
@@ -1912,7 +1912,10 @@ function _buildTileLayer(style) {
     maxNativeZoom: cfg.maxNativeZoom, maxZoom: cfg.maxZoom,
     keepBuffer: 2, crossOrigin: '',
     updateWhenIdle: false, updateWhenZooming: false,
-    detectRetina: true, errorTileUrl: _EMPTY_TILE,
+    // Tuiles HiDPI : si l'URL gère {r} (CartoDB → @2x natif), on laisse Leaflet
+    // remplir {r} et on désactive detectRetina (sinon double mise à l'échelle).
+    // Sinon (Esri, OpenTopoMap), on garde l'astuce zoom+1 de detectRetina.
+    detectRetina: cfg.url.indexOf('{r}') === -1, errorTileUrl: _EMPTY_TILE,
   };
   if (cfg.subdomains) opts.subdomains = cfg.subdomains;
 
@@ -2463,7 +2466,7 @@ function _switchBasemap(name) {
   // Mémorise le choix ; la bascule effective de tile layer existe déjà dans
   // _buildTileLayer (cf. settings). Ici on déclenche juste la même logique.
   if (typeof _settings !== 'undefined' && _settings) {
-    var map_to_setting = { 'dark': 'dark', 'light': 'light', 'satellite': 'satellite' };
+    var map_to_setting = { 'dark': 'dark', 'light': 'light', 'osm': 'osm', 'satellite': 'satellite' };
     _settings.tileStyle = map_to_setting[name] || 'light';
     if (typeof _saveSettings === 'function') _saveSettings();
     if (typeof map !== 'undefined' && map && typeof _buildTileLayer === 'function') {
