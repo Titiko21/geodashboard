@@ -63,7 +63,7 @@ const GD_COLORS = {
 const GD_SETTINGS_DEFAULT = {
   theme: 'light',
   density: 'normal',
-  tileStyle: 'dark',
+  tileStyle: 'light',
   zoomDefault: 9,
   showScale: true,
   showLegend: true,
@@ -301,7 +301,7 @@ function initMap(lat, lng) {
     wheelPxPerZoomLevel: 80,
   });
 
-  _tileLayer = _buildTileLayer((_settings && _settings.tileStyle) || 'dark');
+  _tileLayer = _buildTileLayer((_settings && _settings.tileStyle) || 'light');
   _tileLayer.addTo(map);
 
   L.control.zoom({ position: 'bottomright' }).addTo(map);
@@ -2464,7 +2464,7 @@ function _switchBasemap(name) {
   // _buildTileLayer (cf. settings). Ici on déclenche juste la même logique.
   if (typeof _settings !== 'undefined' && _settings) {
     var map_to_setting = { 'dark': 'dark', 'light': 'light', 'satellite': 'satellite' };
-    _settings.tileStyle = map_to_setting[name] || 'dark';
+    _settings.tileStyle = map_to_setting[name] || 'light';
     if (typeof _saveSettings === 'function') _saveSettings();
     if (typeof map !== 'undefined' && map && typeof _buildTileLayer === 'function') {
       if (typeof _tileLayer !== 'undefined' && _tileLayer) map.removeLayer(_tileLayer);
