@@ -252,6 +252,13 @@ LOGGING = {
             'level': 'DEBUG',
             'propagate': False,
         },
+
+        # Diagnostic SSO — rend visibles les échecs de login OIDC en console.
+        'mozilla_django_oidc': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
     },
 
     # Logger racine — capture tout ce qui n'est pas géré ailleurs
