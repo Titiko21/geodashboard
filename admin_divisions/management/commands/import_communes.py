@@ -1,25 +1,27 @@
 """
 import_communes — Importe les communes (frontières polygonales) depuis un
-fichier GeoJSON.
+fichier GeoJSON, crée leurs villes de rattachement et fait le lien.
 
 Cas d'usage initial : fichier « Grand Abidjan » fourni par l'utilisateur, qui
 contient 14 communes :
   - les 13 communes du District Autonome d'Abidjan (Abobo, Adjamé, Attécoubé,
     Cocody, Koumassi, Marcory, Plateau, Port-Bouët, Treichville, Yopougon,
-    Bingerville, Anyama, Songon) ;
-  - Grand-Bassam (région Sud-Comoé → District de la Comoé).
+    Bingerville, Anyama, Songon) → regroupées dans la **Ville d'Abidjan** ;
+  - Grand-Bassam (région Sud-Comoé → District de la Comoé) → **Ville de
+    Grand-Bassam** (1 commune).
+
+Modèle (hiérarchie figée) : District → … → Ville → Commune.
+  - Une Ville regroupe 1..N communes (FK `Commune.ville`).
+  - La géométrie d'une Ville = union des polygones de ses communes.
 
 Rattachement au district :
-  Le champ Commune.district est obligatoire (FK PROTECT). On résout le district
-  parent par NOM (normalisé) parmi les districts existants — pour réutiliser
-  celui qu'aurait créé `import_admin_hdx` (source de référence). S'il manque, on
-  le crée a minima (sans géométrie) avec un avertissement, afin de ne pas
-  bloquer l'import des communes. Les niveaux Région / Département / Sous-préf.
-  restent NULL (cohérent avec le district autonome ; calculables par ST_Within
-  plus tard).
+  Commune.district / Ville.district sont obligatoires (FK PROTECT). On résout le
+  district parent par NOM (normalisé) parmi les districts existants — pour
+  réutiliser celui qu'aurait créé `import_admin_hdx` (source de référence). S'il
+  manque, on le crée a minima (sans géométrie) avec un avertissement.
 
-Idempotent : `update_or_create` par `code` (CIV-COM-<SLUG>). Rejouer la commande
-ne crée pas de doublon et met simplement à jour nom / district / géométrie.
+Idempotent : `update_or_create` par `code` (CIV-VIL-<SLUG> / CIV-COM-<SLUG>).
+Rejouer la commande ne crée pas de doublon.
 
 Usage :
     python manage.py import_communes
@@ -27,13 +29,14 @@ Usage :
     python manage.py import_communes --dry-run
 """
 import json
+from collections import defaultdict
 from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from admin_divisions._hdx_utils import district_code, normalize_name, to_multipolygon
-from admin_divisions.models import Commune, District
+from admin_divisions.models import Commune, District, Ville
 
 # Fichier livré avec le dépôt (données reproductibles).
 DEFAULT_FILE = Path(__file__).resolve().parents[2] / "data" / "communes_grand_abidjan.geojson"
@@ -85,6 +88,12 @@ def commune_code(name):
     return f"CIV-COM-{slug}"
 
 
+def ville_code(name):
+    """Code stable et unique d'une ville. « Abidjan » → « CIV-VIL-ABIDJAN »."""
+    slug = normalize_name(name).upper().replace(" ", "-")
+    return f"CIV-VIL-{slug}"
+
+
 def canonical_name(name):
     """Nom d'affichage propre, sinon le nom source tel quel."""
     return CANONICAL_NAMES.get(normalize_name(name), name)
@@ -103,6 +112,20 @@ def district_for_commune(name):
     return None
 
 
+def ville_for_commune(name):
+    """
+    Nom de la ville de rattachement d'une commune (None si inconnue).
+    Les 13 communes d'Abidjan → Ville d'Abidjan ; les autres sont leur propre
+    ville (cas Grand-Bassam : Ville de Grand-Bassam = 1 commune).
+    """
+    norm = normalize_name(name)
+    if norm in ABIDJAN_COMMUNES:
+        return "Abidjan"
+    if norm in DISTRICT_OVERRIDES:
+        return canonical_name(name)
+    return None
+
+
 def _feature_name(props):
     for field in NAME_FIELDS:
         if props.get(field):
@@ -112,8 +135,8 @@ def _feature_name(props):
 
 class Command(BaseCommand):
     help = (
-        "Importe les communes (polygones) depuis un GeoJSON et les rattache à "
-        "leur district. Idempotent (update_or_create par code)."
+        "Importe les communes (polygones) depuis un GeoJSON, crée leurs villes "
+        "de rattachement et fait le lien. Idempotent (update_or_create par code)."
     )
 
     def add_arguments(self, parser):
@@ -170,71 +193,123 @@ class Command(BaseCommand):
             created_districts.append(name)
             return district
 
-        created, updated, skipped = 0, 0, 0
+        # ── 1. Lecture des features → enregistrements normalisés ────────────
+        records = []
+        skipped = 0
+        for feat in features:
+            props = feat.get("properties", {}) or {}
+            raw_name = _feature_name(props)
+            if not raw_name:
+                self.stderr.write("  Feature sans nom — ignorée")
+                skipped += 1
+                continue
+
+            mapping = district_for_commune(raw_name)
+            ville_name = ville_for_commune(raw_name)
+            if mapping is None or ville_name is None:
+                self.stderr.write(
+                    f"  Commune non reconnue : « {raw_name} » — ignorée"
+                )
+                skipped += 1
+                continue
+
+            geom_dict = feat.get("geometry")
+            if not geom_dict:
+                self.stderr.write(f"  {raw_name} : géométrie absente — ignorée")
+                skipped += 1
+                continue
+            try:
+                geom = GEOSGeometry(json.dumps(geom_dict), srid=4326)
+                multipoly = to_multipolygon(geom)
+            except Exception as exc:
+                self.stderr.write(f"  {raw_name} : géométrie invalide ({exc}) — ignorée")
+                skipped += 1
+                continue
+            if multipoly is None:
+                self.stderr.write(
+                    f"  {raw_name} : géométrie {geom.geom_type} non polygonale — ignorée"
+                )
+                skipped += 1
+                continue
+
+            district_name, is_autonomous = mapping
+            records.append({
+                "display":        canonical_name(raw_name),
+                "code":           commune_code(raw_name),
+                "district_name":  district_name,
+                "is_autonomous":  is_autonomous,
+                "ville_name":     ville_name,
+                "multipoly":      multipoly,
+            })
+
+        # ── 2. Groupement par ville ─────────────────────────────────────────
+        groups = defaultdict(list)
+        for rec in records:
+            groups[rec["ville_name"]].append(rec)
+
+        created_v, updated_v, created_c, updated_c = 0, 0, 0, 0
+        ville_objs = {}
 
         with transaction.atomic():
-            for feat in features:
-                props = feat.get("properties", {}) or {}
-                raw_name = _feature_name(props)
-                if not raw_name:
-                    self.stderr.write("  Feature sans nom — ignorée")
-                    skipped += 1
-                    continue
+            # ── 3. Villes (géométrie = union des communes membres) ──────────
+            for ville_name, members in sorted(groups.items()):
+                district = resolve_district(
+                    members[0]["district_name"], members[0]["is_autonomous"]
+                )
+                geoms = [m["multipoly"] for m in members if m["multipoly"] is not None]
+                union = None
+                if geoms:
+                    acc = geoms[0]
+                    for g in geoms[1:]:
+                        acc = acc.union(g)
+                    union = to_multipolygon(acc) or acc
 
-                mapping = district_for_commune(raw_name)
-                if mapping is None:
-                    self.stderr.write(
-                        f"  Commune non reconnue : « {raw_name} » — ignorée "
-                        "(district parent inconnu)"
-                    )
-                    skipped += 1
-                    continue
-
-                district_name, is_autonomous = mapping
-
-                geom_dict = feat.get("geometry")
-                if not geom_dict:
-                    self.stderr.write(f"  {raw_name} : géométrie absente — ignorée")
-                    skipped += 1
-                    continue
-                try:
-                    geom = GEOSGeometry(json.dumps(geom_dict), srid=4326)
-                    multipoly = to_multipolygon(geom)
-                except Exception as exc:
-                    self.stderr.write(f"  {raw_name} : géométrie invalide ({exc}) — ignorée")
-                    skipped += 1
-                    continue
-                if multipoly is None:
-                    self.stderr.write(
-                        f"  {raw_name} : géométrie {geom.geom_type} non polygonale — ignorée"
-                    )
-                    skipped += 1
-                    continue
-
-                district = resolve_district(district_name, is_autonomous)
-                code = commune_code(raw_name)
-                display = canonical_name(raw_name)
-
+                vcode = ville_code(ville_name)
                 if dry_run:
                     self.stdout.write(
-                        f"  {display:14s} → {code:22s} | district {district_name}"
+                        f"  [Ville] {ville_name} ({vcode}) ← {len(members)} commune(s) "
+                        f"| district {members[0]['district_name']}"
+                    )
+                    ville_objs[ville_name] = None
+                    continue
+
+                ville, v_created = Ville.objects.update_or_create(
+                    code=vcode,
+                    defaults={"name": ville_name, "district": district, "geom": union},
+                )
+                ville_objs[ville_name] = ville
+                if v_created:
+                    created_v += 1
+                    self.stdout.write(f"  + Ville {ville_name} ({vcode}) ← {len(members)} commune(s)")
+                else:
+                    updated_v += 1
+                    self.stdout.write(f"  ~ Ville {ville_name} ({vcode}) — mise à jour")
+
+            # ── 4. Communes (rattachées à leur ville + district) ────────────
+            for rec in sorted(records, key=lambda r: r["display"]):
+                if dry_run:
+                    self.stdout.write(
+                        f"  {rec['display']:14s} → {rec['code']:22s} "
+                        f"| ville {rec['ville_name']} | district {rec['district_name']}"
                     )
                     continue
 
-                _, was_created = Commune.objects.update_or_create(
-                    code=code,
+                district = resolve_district(rec["district_name"], rec["is_autonomous"])
+                _, c_created = Commune.objects.update_or_create(
+                    code=rec["code"],
                     defaults={
-                        "name": display,
+                        "name":     rec["display"],
                         "district": district,
-                        "geom": multipoly,
+                        "ville":    ville_objs[rec["ville_name"]],
+                        "geom":     rec["multipoly"],
                     },
                 )
-                if was_created:
-                    created += 1
-                    self.stdout.write(f"  + {display} ({code})")
+                if c_created:
+                    created_c += 1
+                    self.stdout.write(f"    + {rec['display']} ({rec['code']})")
                 else:
-                    updated += 1
-                    self.stdout.write(f"  ~ {display} ({code}) — mis à jour")
+                    updated_c += 1
+                    self.stdout.write(f"    ~ {rec['display']} ({rec['code']}) — mise à jour")
 
             if dry_run:
                 transaction.set_rollback(True)
@@ -248,10 +323,13 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS(f"\n{'═' * 50}"))
         self.stdout.write(self.style.SUCCESS(
-            "Import communes terminé" + (" (DRY RUN)" if dry_run else "")
+            "Import villes + communes terminé" + (" (DRY RUN)" if dry_run else "")
         ))
-        self.stdout.write(f"  Créées      : {created}")
-        self.stdout.write(f"  Mises à jour: {updated}")
+        self.stdout.write(f"  Villes      : {created_v} créées, {updated_v} mises à jour")
+        self.stdout.write(f"  Communes    : {created_c} créées, {updated_c} mises à jour")
         if skipped:
             self.stdout.write(f"  Ignorées    : {skipped}")
-        self.stdout.write(f"  Total base  : {Commune.objects.count()} communes")
+        self.stdout.write(
+            f"  Total base  : {Ville.objects.count()} villes, "
+            f"{Commune.objects.count()} communes"
+        )

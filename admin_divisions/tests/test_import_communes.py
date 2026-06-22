@@ -15,6 +15,8 @@ from admin_divisions.management.commands.import_communes import (
     canonical_name,
     commune_code,
     district_for_commune,
+    ville_code,
+    ville_for_commune,
 )
 
 # Longueur max du champ Commune.code (cf. models.Commune).
@@ -74,6 +76,33 @@ class TestDistrictForCommune:
         assert district_for_commune("Bouaké") is None
 
 
+# ── ville_code ─────────────────────────────────────────────────────────────
+
+class TestVilleCode:
+    def test_prefix_and_format(self):
+        assert ville_code("Abidjan")      == "CIV-VIL-ABIDJAN"
+        assert ville_code("Grand-Bassam") == "CIV-VIL-GRAND-BASSAM"
+
+    def test_within_max_length(self):
+        for name in ("Abidjan", "Grand-Bassam"):
+            assert len(ville_code(name)) <= CODE_MAX_LEN
+
+
+# ── ville_for_commune ──────────────────────────────────────────────────────
+
+class TestVilleForCommune:
+    def test_abidjan_communes_group_under_abidjan(self):
+        assert ville_for_commune("Cocody")    == "Abidjan"
+        assert ville_for_commune("Yopougon")  == "Abidjan"
+        assert ville_for_commune("Attecoube") == "Abidjan"
+
+    def test_grand_bassam_is_its_own_ville(self):
+        assert ville_for_commune("Grand-Bassam") == "Grand-Bassam"
+
+    def test_unknown_returns_none(self):
+        assert ville_for_commune("Bouaké") is None
+
+
 # ── Intégrité du fichier livré ─────────────────────────────────────────────
 
 class TestShippedDataFile:
@@ -103,3 +132,15 @@ class TestShippedDataFile:
     def test_all_geometries_are_polygonal(self):
         for f in self._features():
             assert f["geometry"]["type"] in ("Polygon", "MultiPolygon")
+
+    def test_every_commune_maps_to_a_ville(self):
+        unmapped = [
+            f["properties"].get("NOMS")
+            for f in self._features()
+            if ville_for_commune(f["properties"].get("NOMS")) is None
+        ]
+        assert unmapped == []
+
+    def test_two_distinct_villes(self):
+        villes = {ville_for_commune(f["properties"]["NOMS"]) for f in self._features()}
+        assert villes == {"Abidjan", "Grand-Bassam"}

@@ -2,7 +2,7 @@
 Tests de structure des modèles admin_divisions.
 
 Couvre :
-  - Création des 5 modèles avec leurs FK
+  - Création des 6 modèles (dont Ville) avec leurs FK
   - Cas du district autonome (Commune sans région/département/sous-préf)
   - Cas standard (Commune dans la chaîne déconcentrée complète)
   - Round-trip PostGIS sur les MultiPolygon
@@ -16,6 +16,7 @@ from admin_divisions.models import (
     District,
     Region,
     SousPrefecture,
+    Ville,
 )
 
 
@@ -40,20 +41,24 @@ class TestStandardChain:
     def test_full_chain_creation(self):
         district = District.objects.create(code="ZAN", name="Zanzan")
         region   = Region.objects.create(code="GTG", name="Gontougo", district=district)
-        dept     = Departement.objects.create(code="BDK", name="Bondoukou", region=region)
+        dept     = Departement.objects.create(code="BDK", name="Bondoukou", region=region, district=district)
         sp       = SousPrefecture.objects.create(code="BDK-CTR", name="Bondoukou-Centre", departement=dept)
+        ville    = Ville.objects.create(code="V-BDK", name="Bondoukou", district=district)
         commune  = Commune.objects.create(
             code="C-BDK", name="Bondoukou",
             district=district, region=region, departement=dept, sous_prefecture=sp,
+            ville=ville,
         )
 
         assert commune.district == district
         assert commune.region == region
         assert commune.departement == dept
         assert commune.sous_prefecture == sp
+        assert commune.ville == ville
         # Vérif relations inverses
         assert commune in district.communes.all()
         assert commune in region.communes.all()
+        assert commune in ville.communes.all()
 
 
 class TestAutonomousDistrict:

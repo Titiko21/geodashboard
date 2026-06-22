@@ -7,7 +7,7 @@ tables. Tant qu'on n'a pas de donnée, un admin verbeux servirait à rien.
 """
 from django.contrib import admin
 
-from .models import Commune, Departement, District, Region, SousPrefecture
+from .models import Commune, Departement, District, Region, SousPrefecture, Ville
 
 
 @admin.register(District)
@@ -46,9 +46,21 @@ class SousPrefectureAdmin(admin.ModelAdmin):
     ordering      = ("name",)
 
 
+@admin.register(Ville)
+class VilleAdmin(admin.ModelAdmin):
+    list_display  = ("name", "code", "district", "_nb_communes")
+    list_filter   = ("district",)
+    search_fields = ("name", "code")
+    ordering      = ("name",)
+
+    @admin.display(description="Communes")
+    def _nb_communes(self, obj):
+        return obj.communes.count()
+
+
 @admin.register(Commune)
 class CommuneAdmin(admin.ModelAdmin):
-    list_display  = ("name", "code", "district", "region", "sous_prefecture")
-    list_filter   = ("district",)
+    list_display  = ("name", "code", "ville", "district", "sous_prefecture")
+    list_filter   = ("district", "ville")
     search_fields = ("name", "code")
     ordering      = ("name",)

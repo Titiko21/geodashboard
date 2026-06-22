@@ -131,6 +131,54 @@ class SousPrefecture(models.Model):
         return self.name
 
 
+class Ville(models.Model):
+    """
+    Ville — collectivité urbaine qui regroupe une ou plusieurs communes.
+
+    Niveau décentralisé : une Ville (ex. Abidjan) fédère ses communes
+    (Cocody, Yopougon…). Pour une petite ville, Ville et Commune coïncident
+    (1 commune). Rattachée obligatoirement à un District ; les niveaux
+    Région / Département / Sous-préfecture sont nullable (mêmes raisons que
+    Commune : districts autonomes, chevauchements).
+
+    `geom` : polygone (union des communes membres ou frontière officielle),
+    nullable au démarrage.
+    """
+
+    code             = models.CharField(max_length=30, unique=True, verbose_name="Code")
+    name             = models.CharField(max_length=100, verbose_name="Nom")
+
+    district         = models.ForeignKey(
+                           District, on_delete=models.PROTECT, related_name="villes",
+                           verbose_name="District",
+                       )
+    region           = models.ForeignKey(
+                           Region, on_delete=models.PROTECT, related_name="villes",
+                           null=True, blank=True, verbose_name="Région",
+                       )
+    departement      = models.ForeignKey(
+                           Departement, on_delete=models.PROTECT, related_name="villes",
+                           null=True, blank=True, verbose_name="Département",
+                       )
+    sous_prefecture  = models.ForeignKey(
+                           SousPrefecture, on_delete=models.PROTECT, related_name="villes",
+                           null=True, blank=True, verbose_name="Sous-préfecture",
+                       )
+
+    geom             = models.GeometryField(
+                           srid=4326, null=True, blank=True, spatial_index=True,
+                           help_text="Polygone (union des communes membres ou frontière officielle).",
+                       )
+
+    class Meta:
+        verbose_name        = "Ville"
+        verbose_name_plural = "Villes"
+        ordering            = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
 class Commune(models.Model):
     """
     Commune (197) — collectivité locale décentralisée.
@@ -163,6 +211,10 @@ class Commune(models.Model):
     sous_prefecture  = models.ForeignKey(
                            SousPrefecture, on_delete=models.PROTECT, related_name="communes",
                            null=True, blank=True, verbose_name="Sous-préfecture",
+                       )
+    ville            = models.ForeignKey(
+                           Ville, on_delete=models.PROTECT, related_name="communes",
+                           null=True, blank=True, verbose_name="Ville",
                        )
 
     geom             = models.GeometryField(
