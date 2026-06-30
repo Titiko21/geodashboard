@@ -174,12 +174,21 @@ def _parse_admin_filter(request):
 
 
 def _filter_querysets_by_admin(roads_qs, floods_qs, veg_qs, admin_obj):
-    """Filtre spatial PostGIS (ST_Intersects) si admin_obj a une géom."""
+    """
+    Filtre spatial EXACT : chaque objet est rattaché à UNE SEULE entité admin
+    via son point représentatif (`PointOnSurface`) contenu dans le polygone.
+
+    On évite ainsi qu'une route traversant une frontière apparaisse dans
+    plusieurs zones — ce que faisait l'ancien `ST_Intersects`, source du
+    « mélange » entre la zone ciblée et ses voisines.
+    """
     if admin_obj is None or getattr(admin_obj, "geom", None) is None:
         return roads_qs, floods_qs, veg_qs
-    roads_qs  = roads_qs.filter(geom__intersects=admin_obj.geom)
-    floods_qs = floods_qs.filter(geom__intersects=admin_obj.geom)
-    veg_qs    = veg_qs.filter(geom__intersects=admin_obj.geom)
+    from django.contrib.gis.db.models.functions import PointOnSurface
+    geom = admin_obj.geom
+    roads_qs  = roads_qs.filter(geom__isnull=False).annotate(_pt=PointOnSurface("geom")).filter(_pt__within=geom)
+    floods_qs = floods_qs.filter(geom__isnull=False).annotate(_pt=PointOnSurface("geom")).filter(_pt__within=geom)
+    veg_qs    = veg_qs.filter(geom__isnull=False).annotate(_pt=PointOnSurface("geom")).filter(_pt__within=geom)
     return roads_qs, floods_qs, veg_qs
 
 
@@ -500,18 +509,28 @@ def api_map_data(request):
     zone_code     = request.GET.get("zone", "")
     selected_zone = Zone.objects.filter(code=zone_code).first() if zone_code else None
 
-    roads_qs  = RoadSegment.objects.filter(zone=selected_zone) if selected_zone \
-                else RoadSegment.objects.all()
-    floods_qs = FloodRisk.objects.filter(zone=selected_zone) if selected_zone \
-                else FloodRisk.objects.all()
-    veg_qs    = VegetationDensity.objects.filter(zone=selected_zone) if selected_zone \
-                else VegetationDensity.objects.all()
-
-    # Filtre admin unifié (?admin=<level>:<code>) — ST_Intersects via PostGIS
     _admin_level, _admin_obj = _parse_admin_filter(request)
-    roads_qs, floods_qs, veg_qs = _filter_querysets_by_admin(
-        roads_qs, floods_qs, veg_qs, _admin_obj
-    )
+    _admin_has_geom = _admin_obj is not None and getattr(_admin_obj, "geom", None) is not None
+
+    if _admin_has_geom:
+        # Filtre admin AUTORITAIRE et EXACT : on repart de TOUTES les données et
+        # on garde celles dont le point représentatif tombe dans le polygone de
+        # l'entité. On IGNORE le tag `zone` (basé sur une bbox d'import OSM, donc
+        # imprécis et source de "mélange" entre zones voisines).
+        roads_qs  = RoadSegment.objects.all()
+        floods_qs = FloodRisk.objects.all()
+        veg_qs    = VegetationDensity.objects.all()
+        roads_qs, floods_qs, veg_qs = _filter_querysets_by_admin(
+            roads_qs, floods_qs, veg_qs, _admin_obj
+        )
+    else:
+        # Fallback legacy : filtre par tag `zone` (import OSM par bbox) si fourni.
+        roads_qs  = RoadSegment.objects.filter(zone=selected_zone) if selected_zone \
+                    else RoadSegment.objects.all()
+        floods_qs = FloodRisk.objects.filter(zone=selected_zone) if selected_zone \
+                    else FloodRisk.objects.all()
+        veg_qs    = VegetationDensity.objects.filter(zone=selected_zone) if selected_zone \
+                    else VegetationDensity.objects.all()
 
     flood_colors = {
         "faible": "#22d3ee", "modere": "#3b82f6",
