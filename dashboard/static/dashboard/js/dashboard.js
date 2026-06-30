@@ -386,6 +386,7 @@ function _loadMapData(zoneCode, adminFilter) {
     .then(function (data) {
       _renderData(data);
       updateLegend('all');
+      if (_zoneSelCode) _showZonePanel(_zoneSelName, data);   // stats de la zone sélectionnée
       _hideOverlay();
     })
     .catch(function (err) {
@@ -1323,6 +1324,7 @@ function _loadAdminBoundariesOverlay() {
 ══════════════════════════════════════════════════════════ */
 let lZones = null;        // L.geoJSON des polygones de communes
 let _zoneSelCode = null;  // code de la commune sélectionnée (ou null)
+let _zoneSelName = null;  // nom de la zone sélectionnée (pour le panneau de stats)
 
 var _ZONE_STYLE = {
   base:     { color: '#2563eb', weight: 1.2, opacity: 0.55, fillColor: '#2563eb', fillOpacity: 0.04 },
@@ -1433,51 +1435,105 @@ function _selectZone(props, layer) {
   if (lZones) lZones.eachLayer(function (l) {
     if (l.feature && l.feature.properties) l.setStyle(_zoneStyleFor(l.feature.properties.code));
   });
+  _zoneSelName = props.name;
   _loadMapData(null, (props.level || 'commune') + ':' + props.code);   // données de cette seule zone
   try { map.fitBounds(layer.getBounds(), { padding: [24, 24], maxZoom: 14 }); } catch (e) {}
-  _showZoneBanner(props.name);
+  _showZonePanel(props.name, null);   // nom + "Chargement…" ; les stats arrivent au rendu
 }
 
 function _clearZoneSel() {
   _zoneSelCode = null;
+  _zoneSelName = null;
   if (lZones) lZones.eachLayer(function (l) { l.setStyle(_ZONE_STYLE.base); });
   _loadMapData();          // toutes les données
-  _hideZoneBanner();
+  _hideZonePanel();
 }
 
-let _zoneBanner = null;
-function _showZoneBanner(name) {
-  if (!_zoneBanner) {
+let _zonePanel = null;
+
+/* Calcule les stats d'une zone à partir des données déjà chargées (aucun
+   appel réseau supplémentaire). */
+function _zoneStats(data) {
+  var routes = (data && data.routes) || [];
+  var floods = (data && data.floods) || [];
+  var veg    = (data && data.vegetation) || [];
+  var s = { bon: 0, degrade: 0, critique: 0, ferme: 0 };
+  var sum = 0, nsc = 0;
+  routes.forEach(function (r) {
+    if (s[r.status] !== undefined) s[r.status]++;
+    if (typeof r.condition_score === 'number') { sum += r.condition_score; nsc++; }
+  });
+  var tot = routes.length;
+  var deg = s.degrade + s.critique + s.ferme;
+  var floodHi = floods.filter(function (f) {
+    return f.risk_level === 'eleve' || f.risk_level === 'critique';
+  }).length;
+  return {
+    tot: tot, bon: s.bon, degrade: s.degrade, critique: s.critique, ferme: s.ferme,
+    pctDeg: tot ? Math.round(100 * deg / tot) : 0,
+    avg: nsc ? Math.round(sum / nsc) : 0,
+    floods: floods.length, floodHi: floodHi, veg: veg.length,
+  };
+}
+
+function _stChip(label, n, color) {
+  return '<span style="background:' + color + ';color:#fff;border-radius:6px;'
+    + 'padding:2px 6px;font-size:11px;white-space:nowrap">' + label + ' ' + n + '</span>';
+}
+
+function _showZonePanel(name, data) {
+  if (!_zonePanel) {
     var Ctrl = L.Control.extend({
       options: { position: 'topleft' },
       onAdd: function () {
         var div = L.DomUtil.create('div');
-        div.style.cssText = 'background:rgba(255,255,255,.96);padding:6px 10px;border-radius:8px;'
-          + 'box-shadow:0 1px 5px rgba(0,0,0,.25);font:13px/1.2 system-ui,sans-serif;color:#0f172a;'
-          + 'display:flex;align-items:center;gap:10px;';
+        div.style.cssText = 'background:rgba(255,255,255,.97);padding:10px 12px;border-radius:10px;'
+          + 'box-shadow:0 2px 8px rgba(0,0,0,.28);font:12px/1.35 system-ui,sans-serif;color:#0f172a;'
+          + 'min-width:206px;max-width:244px;';
         L.DomEvent.disableClickPropagation(div);
+        L.DomEvent.disableScrollPropagation(div);
         return div;
       },
     });
-    _zoneBanner = new Ctrl();
-    _zoneBanner.addTo(map);
+    _zonePanel = new Ctrl();
+    _zonePanel.addTo(map);
   }
-  var el = _zoneBanner.getContainer();
-  el.textContent = '';
-  var lbl = document.createElement('span');
-  lbl.appendChild(document.createTextNode('Zone : '));
-  var strong = document.createElement('strong'); strong.textContent = name;
-  lbl.appendChild(strong);
-  var btn = document.createElement('button');
-  btn.type = 'button'; btn.textContent = 'Tout afficher';
-  btn.style.cssText = 'cursor:pointer;border:0;background:#dc2626;color:#fff;'
-    + 'padding:3px 9px;border-radius:6px;font-size:12px;';
-  btn.onclick = _clearZoneSel;
-  el.appendChild(lbl); el.appendChild(btn);
-  el.style.display = 'flex';
+  var el = _zonePanel.getContainer();
+  el.style.display = 'block';
+
+  var head = '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
+    + '<strong class="zp-name" style="font-size:13px"></strong>'
+    + '<button type="button" class="zp-clear" title="Tout afficher" style="cursor:pointer;'
+    + 'border:0;background:#dc2626;color:#fff;padding:2px 8px;border-radius:6px;line-height:1.4">✕</button>'
+    + '</div>';
+
+  if (!data) {
+    el.innerHTML = head + '<div style="margin-top:6px;color:#64748b">Chargement…</div>';
+  } else {
+    var st = _zoneStats(data);
+    var roadLabel = (typeof _focusAll !== 'undefined' && _focusAll) ? 'Tronçons' : 'Axes structurants';
+    el.innerHTML = head
+      + '<div style="margin-top:8px;display:grid;grid-template-columns:1fr auto;gap:3px 10px">'
+      +   '<span>' + roadLabel + '</span><b style="text-align:right">' + st.tot + '</b>'
+      +   '<span>Score moyen</span><b style="text-align:right">' + st.avg + '/100</b>'
+      +   '<span>% dégradé</span><b style="text-align:right;color:' + (st.pctDeg >= 40 ? '#dc2626' : '#16a34a') + '">' + st.pctDeg + '%</b>'
+      + '</div>'
+      + '<div style="margin-top:7px;border-top:1px solid #e2e8f0;padding-top:6px;color:#475569">État du réseau</div>'
+      + '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px">'
+      +   _stChip('Bon', st.bon, '#16a34a') + _stChip('Dégradé', st.degrade, '#f59e0b')
+      +   _stChip('Critique', st.critique, '#dc2626') + _stChip('Fermé', st.ferme, '#7f1d1d')
+      + '</div>'
+      + '<div style="margin-top:8px;border-top:1px solid #e2e8f0;padding-top:6px;display:grid;grid-template-columns:1fr auto;gap:3px 10px">'
+      +   '<span>Inondations</span><b style="text-align:right">' + st.floods + (st.floodHi ? ' · ' + st.floodHi + ' à risque' : '') + '</b>'
+      +   '<span>Végétation</span><b style="text-align:right">' + st.veg + '</b>'
+      + '</div>';
+  }
+  el.querySelector('.zp-name').textContent = name || 'Zone';
+  el.querySelector('.zp-clear').onclick = _clearZoneSel;
 }
-function _hideZoneBanner() {
-  if (_zoneBanner && _zoneBanner.getContainer()) _zoneBanner.getContainer().style.display = 'none';
+
+function _hideZonePanel() {
+  if (_zonePanel && _zonePanel.getContainer()) _zonePanel.getContainer().style.display = 'none';
 }
 
 
