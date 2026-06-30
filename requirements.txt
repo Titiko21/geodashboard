@@ -43,9 +43,6 @@ gunicorn>=21.0
 # Authentification SSO Keycloak (OIDC)
 mozilla-django-oidc==4.0.1
 
-# Scheduler (jobs récurrents OSM/GEE — service `scheduler`)
-APScheduler==3.10.4
-
 # Tests
 pytest==8.3.4
 pytest-django==4.9.0

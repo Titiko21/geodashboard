@@ -12,8 +12,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # ── Résolution explicite des bibliothèques GIS (GDAL / GEOS) ────────────────
 # `ctypes.util.find_library` est capricieux selon le process (il shelle vers
-# ldconfig/gcc/objdump) : il réussit dans le conteneur `web` mais échouait dans
-# le `scheduler` ("Could not find the GDAL library"), provoquant un crash-loop.
+# ldconfig/gcc/objdump) et peut échouer ("Could not find the GDAL library")
+# dans des process ponctuels (ex. commandes manuelles via `docker compose run`).
 # On pointe les libs directement (chemins Debian standard de l'image), ce qui
 # rend le chargement déterministe pour TOUS les process. Surchargeable par env.
 _gdal_lib = os.environ.get('GDAL_LIBRARY_PATH', '/usr/lib/x86_64-linux-gnu/libgdal.so')

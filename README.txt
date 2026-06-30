@@ -24,10 +24,7 @@ Commandes utiles :
     # Console Django dans le conteneur
     docker compose exec web python manage.py shell
 
-    # Activer le scheduler (refresh OSM hebdo + GEE quotidien)
-    docker compose --profile scheduler up -d
-
-    # Rafraîchir les scores satellite à la demande
+    # Rafraîchir les scores satellite à la demande (manuel)
     docker compose exec web python manage.py update_gee_scores
 
     # Réimporter OSM pour une ville
@@ -39,8 +36,8 @@ Commandes utiles :
 
 geodashboard/
 ├── manage.py                            ← Point d'entrée Django
-├── requirements.txt                     ← Dépendances Python (Django, PostGIS, GEE, APScheduler...)
-├── docker-compose.yml                   ← Stack : db (postgis), web, scheduler (opt-in), keycloak (opt-in)
+├── requirements.txt                     ← Dépendances Python (Django, PostGIS, GEE...)
+├── docker-compose.yml                   ← Stack : db (postgis), web, keycloak (opt-in)
 ├── docker-compose.override.yml          ← Override dev : bind mount + runserver
 ├── Dockerfile                           ← Image web (Django + GDAL/GEOS/PROJ)
 ├── entrypoint.sh                        ← Bootstrap conteneur (migrate + import dump si vide)
@@ -66,8 +63,7 @@ geodashboard/
     └── management/commands/
         ├── populate_geodata.py          ← Import OSM via Overpass
         ├── update_gee_scores.py         ← Calcul scores satellite par segment
-        ├── check_missing.py             ← Diagnostic zones sans données
-        └── run_scheduler.py             ← Scheduler APScheduler (jobs hebdo/quotidiens)
+        └── check_missing.py             ← Diagnostic zones sans données
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  FONCTIONNALITÉS

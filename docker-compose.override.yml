@@ -30,13 +30,3 @@ services:
         python manage.py migrate --noinput
         echo "[GéoDash dev] Démarrage runserver sur 0.0.0.0:8000..."
         exec python manage.py runserver 0.0.0.0:8000
-
-  # Bind mount du code → reload manuel du scheduler après chaque modif
-  # (APScheduler ne fait pas d'auto-reload comme runserver).
-  scheduler:
-    volumes:
-      - .:/app
-      - O:/Confidentiel/private-key.json:/app/gee_credentials.json:ro
-    environment:
-      PYTHONDONTWRITEBYTECODE: "1"
-      PYTHONUNBUFFERED: "1"

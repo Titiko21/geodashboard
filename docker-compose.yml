@@ -112,32 +112,5 @@ services:
     entrypoint: ["/app/entrypoint.sh"]
     command: []
 
-  # ── Scheduler (jobs récurrents OSM/GEE) ──────────────────────────────────────
-  # Réutilise l'image `web` (build identique). Tourne APScheduler en
-  # BlockingScheduler dans le process principal — pas de cron système.
-  # Jobs : populate_geodata (dimanche 03:00), update_gee_scores (04:00 tous les jours).
-  # Désactivable via SCHEDULER_DISABLED=1 dans .env.
-  # Opt-in via profile : `docker compose --profile scheduler up`
-  scheduler:
-    profiles: ["scheduler"]
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: geedashboard-local:dev
-    restart: unless-stopped
-    env_file: .env
-    volumes:
-      - O:/Confidentiel/private-key.json:/app/gee_credentials.json:ro
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
-    depends_on:
-      db:
-        condition: service_healthy
-      web:
-        condition: service_healthy
-    entrypoint: []
-    command: ["python", "manage.py", "run_scheduler"]
-
 volumes:
   postgres_data:
