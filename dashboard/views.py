@@ -532,6 +532,11 @@ def api_map_data(request):
         veg_qs    = VegetationDensity.objects.filter(zone=selected_zone) if selected_zone \
                     else VegetationDensity.objects.all()
 
+    # Allègement de la carte : par défaut, seuls les axes structurants
+    # (motorway/trunk/primary/secondary) sont rendus — réseau décisionnel
+    # lisible. ?focus=all = réseau complet (toutes les voies).
+    roads_qs = _apply_strategic_filter(roads_qs, request)
+
     flood_colors = {
         "faible": "#22d3ee", "modere": "#3b82f6",
         "eleve": "#f97316", "critique": "#dc2626",

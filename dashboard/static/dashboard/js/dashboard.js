@@ -342,6 +342,7 @@ function initMap(lat, lng) {
      → recharge la carte filtrée à cette seule zone. Rechargées au déplacement. */
   _loadClickableZones();
   map.on('moveend zoomend', _scheduleZonesReload);
+  _addFocusControl();
 
   /* GEE — overlays NDVI/SAR : opt-in via chips (toggleOverlay).
      Pas de chargement automatique pour ne pas saturer la carte au boot
@@ -360,10 +361,16 @@ function _refreshActiveOverlays() {
 
 /* Charge les géométries depuis /api/map-data/ et les passe au rendu Leaflet.
    Appelé au boot et à chaque changement de zone. */
+var _focusAll = false;                          // false = axes structurants ; true = réseau complet
+var _lastMapArgs = { zone: null, admin: null };
+
 function _loadMapData(zoneCode, adminFilter) {
-  var qs = adminFilter ? ('?admin=' + encodeURIComponent(adminFilter))
-         : (zoneCode ? ('?zone=' + encodeURIComponent(zoneCode)) : '');
-  var url = '/api/map-data/' + qs;
+  _lastMapArgs = { zone: zoneCode || null, admin: adminFilter || null };
+  var params = [];
+  if (adminFilter)   params.push('admin=' + encodeURIComponent(adminFilter));
+  else if (zoneCode) params.push('zone='  + encodeURIComponent(zoneCode));
+  if (_focusAll)     params.push('focus=all');
+  var url = '/api/map-data/' + (params.length ? '?' + params.join('&') : '');
   return fetch(url, {
     headers:     _apiHeaders(),
     redirect:    'manual',
@@ -433,6 +440,9 @@ function _renderData(data) {
   if (lFloods) lFloods.clearLayers();
   if (lVeg)    lVeg.clearLayers();
   var n = 0;
+  // Au-delà d'un seuil de tronçons, on allège le rendu : pas d'ombre portée
+  // (divise par 2 le nombre d'objets dessinés).
+  var heavy = (data.routes || []).length > 1500;
   _allBounds = [];
 
   (data.routes || []).forEach(function (r) {
@@ -448,23 +458,26 @@ function _renderData(data) {
         });
       } else return;
 
-      var shadow = L.polyline(coords, {
-        color: 'rgba(0,0,0,.45)', weight: 8, opacity: 1,
-        lineCap: 'round', lineJoin: 'round', interactive: false,
-      });
-      lRoads.addLayer(shadow);
+      var shadow = null;
+      if (!heavy) {
+        shadow = L.polyline(coords, {
+          color: 'rgba(0,0,0,.45)', weight: 8, opacity: 1,
+          lineCap: 'round', lineJoin: 'round', interactive: false,
+        });
+        lRoads.addLayer(shadow);
+      }
 
       var opts = { color: r.color, weight: 5, opacity: .9, lineCap: 'round', lineJoin: 'round' };
       var lyr = L.polyline(coords, opts);
 
       lyr.on('mouseover', function (e) {
         this.setStyle({ weight: 8, opacity: 1 });
-        shadow.setStyle({ weight: 12 });
+        if (shadow) shadow.setStyle({ weight: 12 });
         L.DomUtil.addClass(e.target._path, 'gd-hover');
       });
       lyr.on('mouseout', function (e) {
         this.setStyle({ weight: 5, opacity: .9 });
-        shadow.setStyle({ weight: 8 });
+        if (shadow) shadow.setStyle({ weight: 8 });
         L.DomUtil.removeClass(e.target._path, 'gd-hover');
       });
       lyr.bindPopup(_popupRoad(r), { maxWidth: 280, className: 'gd-popup', autoPanPadding: [50, 50] });
@@ -1383,6 +1396,36 @@ let _zonesReloadTimer = null;
 function _scheduleZonesReload() {
   clearTimeout(_zonesReloadTimer);
   _zonesReloadTimer = setTimeout(_loadClickableZones, 350);
+}
+
+/* Bascule « Axes principaux ⇄ Tout le réseau » — allègement du rendu. */
+function _addFocusControl() {
+  var Ctrl = L.Control.extend({
+    options: { position: 'topright' },
+    onAdd: function () {
+      var b = L.DomUtil.create('button');
+      b.type = 'button';
+      b.textContent = 'Axes principaux';
+      b.title = 'Basculer entre axes structurants et réseau complet';
+      b.style.cssText = 'cursor:pointer;border:0;background:rgba(255,255,255,.96);color:#0f172a;'
+        + 'padding:5px 10px;border-radius:8px;box-shadow:0 1px 5px rgba(0,0,0,.25);'
+        + 'font:12px/1.2 system-ui,sans-serif;';
+      L.DomEvent.disableClickPropagation(b);
+      b.onclick = function () {
+        _focusAll = !_focusAll;
+        b.textContent      = _focusAll ? 'Tout le réseau' : 'Axes principaux';
+        b.style.background  = _focusAll ? '#2563eb' : 'rgba(255,255,255,.96)';
+        b.style.color       = _focusAll ? '#fff' : '#0f172a';
+        // Ne recharge que si une zone est sélectionnée (sinon focus=all sans
+        // filtre = tout le pays = page figée).
+        if (_lastMapArgs.zone || _lastMapArgs.admin) {
+          _loadMapData(_lastMapArgs.zone, _lastMapArgs.admin);
+        }
+      };
+      return b;
+    },
+  });
+  new Ctrl().addTo(map);
 }
 
 function _selectZone(props, layer) {
