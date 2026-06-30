@@ -48,6 +48,12 @@ class RoadSegment(models.Model):
                           max_length=20, choices=SURFACE_CHOICES, default='bitume',
                           blank=True, verbose_name="Type de surface",
                       )
+    is_strategic    = models.BooleanField(
+                          default=False, db_index=True,
+                          verbose_name="Axe structurant",
+                          help_text="True pour motorway/trunk/primary/secondary — filtre indexé "
+                                    "pour la vue décisionnelle (remplace un regex coûteux sur `notes`).",
+                      )
     geojson         = models.JSONField(default=dict, help_text="GeoJSON LineString du tracé")
     geom            = models.GeometryField(
                           srid=4326, null=True, blank=True, spatial_index=True,

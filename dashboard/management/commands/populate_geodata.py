@@ -747,6 +747,7 @@ def _build_road_defaults(el: dict, now) -> dict | None:
         "status":          status,
         "condition_score": score,
         "surface_type":    surface,
+        "is_strategic":    highway in ("motorway", "trunk", "primary", "secondary"),
         "geojson":         geojson,
         "geom":            _geojson_to_geom(geojson),
         "notes":           " | ".join(parts),
@@ -826,7 +827,7 @@ _MODEL_CONFIG = {
     RoadSegment: {
         "builder":       _build_road_defaults,
         "update_fields": ["name", "condition_score", "status", "surface_type",
-                          "geojson", "geom", "notes", "last_analyzed"],
+                          "is_strategic", "geojson", "geom", "notes", "last_analyzed"],
     },
     FloodRisk: {
         "builder":       _build_flood_defaults,

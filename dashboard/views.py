@@ -231,8 +231,9 @@ def _apply_strategic_filter(roads_qs, request):
     focus = (request.GET.get("focus") or "major").strip().lower()
     if focus == "all":
         return roads_qs
-    # Le type OSM est stocké dans le champ `notes` ("Type OSM : motorway | …")
-    return roads_qs.filter(notes__iregex=STRATEGIC_HIGHWAY_REGEX)
+    # Booléen indexé `is_strategic` (peuplé à l'import) — bien plus rapide que
+    # l'ancien regex `notes__iregex` (scan séquentiel sur ~128k lignes).
+    return roads_qs.filter(is_strategic=True)
 
 
 def _filter_zones_by_admin(zones_qs, admin_obj):
@@ -373,24 +374,29 @@ def dashboard(request):
 
     unread = Alert.objects.filter(is_read=False).count()
 
-    dist = {"0-25": 0, "26-50": 0, "51-75": 0, "76-100": 0}
-    for r in roads_qs:
-        sc = r.condition_score or 0
-        if sc <= 25:   dist["0-25"]   += 1
-        elif sc <= 50: dist["26-50"]  += 1
-        elif sc <= 75: dist["51-75"]  += 1
-        else:          dist["76-100"] += 1
+    # Histogramme + répartition calculés EN BASE (agrégation conditionnelle)
+    # plutôt qu'en chargeant tous les objets en Python.
+    from django.db.models import Count, Q
+    rb = roads_qs.aggregate(
+        b1=Count("pk", filter=Q(condition_score__lte=25)),
+        b2=Count("pk", filter=Q(condition_score__gt=25, condition_score__lte=50)),
+        b3=Count("pk", filter=Q(condition_score__gt=50, condition_score__lte=75)),
+        b4=Count("pk", filter=Q(condition_score__gt=75)),
+    )
+    chart_routes = {
+        "labels": ["0-25", "26-50", "51-75", "76-100"],
+        "data":   [rb["b1"], rb["b2"], rb["b3"], rb["b4"]],
+    }
 
-    chart_routes = {"labels": list(dist.keys()), "data": list(dist.values())}
-
-    flood_lvl = {"faible": 0, "modere": 0, "eleve": 0, "critique": 0}
-    for f in floods_qs:
-        if f.risk_level in flood_lvl:
-            flood_lvl[f.risk_level] += 1
-
+    fl = floods_qs.aggregate(
+        faible=Count("pk", filter=Q(risk_level="faible")),
+        modere=Count("pk", filter=Q(risk_level="modere")),
+        eleve=Count("pk", filter=Q(risk_level="eleve")),
+        critique=Count("pk", filter=Q(risk_level="critique")),
+    )
     chart_floods = {
         "labels": ["Faible", "Modéré", "Élevé", "Critique"],
-        "data":   list(flood_lvl.values()),
+        "data":   [fl["faible"], fl["modere"], fl["eleve"], fl["critique"]],
     }
 
     total_roads    = roads_qs.count()
