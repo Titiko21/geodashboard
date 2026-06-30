@@ -1449,8 +1449,6 @@ function _clearZoneSel() {
   _hideZonePanel();
 }
 
-let _zonePanel = null;
-
 /* Calcule les stats d'une zone à partir des données déjà chargées (aucun
    appel réseau supplémentaire). */
 function _zoneStats(data) {
@@ -1463,77 +1461,85 @@ function _zoneStats(data) {
     if (s[r.status] !== undefined) s[r.status]++;
     if (typeof r.condition_score === 'number') { sum += r.condition_score; nsc++; }
   });
+  var fsum = 0, fn = 0, fcrit = 0;
+  floods.forEach(function (f) {
+    if (typeof f.risk_score === 'number') { fsum += f.risk_score; fn++; }
+    if (f.risk_level === 'critique') fcrit++;
+  });
+  var vsum = 0, vn = 0, vdense = 0;
+  veg.forEach(function (v) {
+    if (typeof v.ndvi_value === 'number') { vsum += v.ndvi_value; vn++; }
+    if (v.density_class === 'dense' || v.density_class === 'very_dense') vdense++;
+  });
   var tot = routes.length;
   var deg = s.degrade + s.critique + s.ferme;
-  var floodHi = floods.filter(function (f) {
-    return f.risk_level === 'eleve' || f.risk_level === 'critique';
-  }).length;
   return {
     tot: tot, bon: s.bon, degrade: s.degrade, critique: s.critique, ferme: s.ferme,
     pctDeg: tot ? Math.round(100 * deg / tot) : 0,
     avg: nsc ? Math.round(sum / nsc) : 0,
-    floods: floods.length, floodHi: floodHi, veg: veg.length,
+    crit: s.critique + s.ferme,
+    floods: floods.length, floodCrit: fcrit, avgFlood: fn ? Math.round(fsum / fn) : 0,
+    veg: veg.length, vDense: vdense, avgNdvi: vn ? (vsum / vn).toFixed(2) : '0.00',
   };
 }
 
 function _stChip(label, n, color) {
   return '<span style="background:' + color + ';color:#fff;border-radius:6px;'
-    + 'padding:2px 6px;font-size:11px;white-space:nowrap">' + label + ' ' + n + '</span>';
+    + 'padding:2px 7px;font-size:11px;white-space:nowrap">' + label + ' ' + n + '</span>';
 }
 
+function _rpSetKpi(sel, val) { var e = document.querySelector(sel); if (e) e.textContent = val; }
+
+/* Met à jour le PANNEAU DE DROITE « Zone sélectionnée » avec les stats de la
+   zone cliquée (pas de panneau flottant — évite tout chevauchement). */
 function _showZonePanel(name, data) {
-  if (!_zonePanel) {
-    var Ctrl = L.Control.extend({
-      options: { position: 'topleft' },
-      onAdd: function () {
-        var div = L.DomUtil.create('div');
-        div.style.cssText = 'background:rgba(255,255,255,.97);padding:10px 12px;border-radius:10px;'
-          + 'box-shadow:0 2px 8px rgba(0,0,0,.28);font:12px/1.35 system-ui,sans-serif;color:#0f172a;'
-          + 'min-width:206px;max-width:244px;';
-        L.DomEvent.disableClickPropagation(div);
-        L.DomEvent.disableScrollPropagation(div);
-        return div;
-      },
-    });
-    _zonePanel = new Ctrl();
-    _zonePanel.addTo(map);
-  }
-  var el = _zonePanel.getContainer();
-  el.style.display = 'block';
+  var elTag   = document.getElementById('rpTag');
+  var elName  = document.getElementById('rpName');
+  var elSub   = document.getElementById('rpSub');
+  var elStats = document.getElementById('rpRoadStats');
+  var elPill  = document.getElementById('rpRoadPill');
+  var elReset = document.getElementById('rpReset');
 
-  var head = '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
-    + '<strong class="zp-name" style="font-size:13px"></strong>'
-    + '<button type="button" class="zp-clear" title="Tout afficher" style="cursor:pointer;'
-    + 'border:0;background:#dc2626;color:#fff;padding:2px 8px;border-radius:6px;line-height:1.4">✕</button>'
-    + '</div>';
+  if (elTag)   elTag.textContent = 'Zone sélectionnée';
+  if (elName)  elName.textContent = name || 'Zone';
+  if (elReset) { elReset.style.display = ''; elReset.onclick = _clearZoneSel; }
 
-  if (!data) {
-    el.innerHTML = head + '<div style="margin-top:6px;color:#64748b">Chargement…</div>';
-  } else {
-    var st = _zoneStats(data);
-    var roadLabel = (typeof _focusAll !== 'undefined' && _focusAll) ? 'Tronçons' : 'Axes structurants';
-    el.innerHTML = head
-      + '<div style="margin-top:8px;display:grid;grid-template-columns:1fr auto;gap:3px 10px">'
-      +   '<span>' + roadLabel + '</span><b style="text-align:right">' + st.tot + '</b>'
-      +   '<span>Score moyen</span><b style="text-align:right">' + st.avg + '/100</b>'
-      +   '<span>% dégradé</span><b style="text-align:right;color:' + (st.pctDeg >= 40 ? '#dc2626' : '#16a34a') + '">' + st.pctDeg + '%</b>'
-      + '</div>'
-      + '<div style="margin-top:7px;border-top:1px solid #e2e8f0;padding-top:6px;color:#475569">État du réseau</div>'
-      + '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px">'
+  if (!data) { if (elSub) elSub.textContent = 'Chargement…'; return; }
+
+  var st = _zoneStats(data);
+  var roadLabel = (typeof _focusAll !== 'undefined' && _focusAll) ? 'tronçon' : 'axe';
+  if (elSub)  elSub.innerHTML = '<span><b>' + st.tot + '</b> ' + roadLabel + (st.tot > 1 ? 's' : '')
+                + ' · <b>' + st.pctDeg + '%</b> dégradé</span>';
+  if (elPill) elPill.textContent = st.avg + '/100';
+
+  // KPIs (sélecteurs stables via data-layer)
+  _rpSetKpi('.rp-kpi[data-layer="roads"] .rp-kpi-val b', st.avg);
+  _rpSetKpi('.rp-kpi[data-layer="floods"] .rp-kpi-val b', st.avgFlood);
+  _rpSetKpi('.rp-kpi[data-layer="vegetation"] .rp-kpi-val b', st.avgNdvi);
+
+  if (elStats) {
+    elStats.innerHTML =
+        '<div><b style="color:var(--ink);font-size:14px;display:block">' + st.tot + '</b>Axes</div>'
+      + '<div><b style="color:var(--ink);font-size:14px;display:block">' + st.crit + '</b>En alerte</div>'
+      + '<div><b style="color:var(--ink);font-size:14px;display:block">' + st.floods + '</b>Inondations</div>'
+      + '<div><b style="color:var(--ink);font-size:14px;display:block">' + st.floodCrit + '</b>Critiques</div>'
+      + '<div style="grid-column:1/-1;display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;'
+      +      'padding-top:8px;border-top:1px solid var(--line,#e2e8f0)">'
       +   _stChip('Bon', st.bon, '#16a34a') + _stChip('Dégradé', st.degrade, '#f59e0b')
       +   _stChip('Critique', st.critique, '#dc2626') + _stChip('Fermé', st.ferme, '#7f1d1d')
-      + '</div>'
-      + '<div style="margin-top:8px;border-top:1px solid #e2e8f0;padding-top:6px;display:grid;grid-template-columns:1fr auto;gap:3px 10px">'
-      +   '<span>Inondations</span><b style="text-align:right">' + st.floods + (st.floodHi ? ' · ' + st.floodHi + ' à risque' : '') + '</b>'
-      +   '<span>Végétation</span><b style="text-align:right">' + st.veg + '</b>'
       + '</div>';
   }
-  el.querySelector('.zp-name').textContent = name || 'Zone';
-  el.querySelector('.zp-clear').onclick = _clearZoneSel;
 }
 
 function _hideZonePanel() {
-  if (_zonePanel && _zonePanel.getContainer()) _zonePanel.getContainer().style.display = 'none';
+  var elTag   = document.getElementById('rpTag');
+  var elName  = document.getElementById('rpName');
+  var elSub   = document.getElementById('rpSub');
+  var elReset = document.getElementById('rpReset');
+  if (elTag)   elTag.textContent = 'Vue globale';
+  if (elName)  elName.textContent = "Côte d'Ivoire";
+  if (elSub)   elSub.textContent = '';
+  if (elReset) elReset.style.display = 'none';
 }
 
 

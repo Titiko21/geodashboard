@@ -322,17 +322,17 @@
     <aside class="right-panel" aria-label="Indicateurs et alertes">
         <div class="rp-head">
             <div class="rp-zone">
-                <span class="rp-tag">
+                <span class="rp-tag" id="rpTag">
                     {% if admin_label %}Zone sélectionnée
                     {% elif selected_zone %}Zone active
                     {% else %}Vue globale{% endif %}
                 </span>
-                <h2>
+                <h2 id="rpName">
                     {% if admin_label %}{{ admin_label }}
                     {% elif selected_zone %}{{ selected_zone.name }}
                     {% else %}Côte d'Ivoire{% endif %}
                 </h2>
-                <div class="rp-sub">
+                <div class="rp-sub" id="rpSub">
                     <span><b>{{ total_roads }}</b> route{{ total_roads|pluralize }} analysée{{ total_roads|pluralize }}</span>
                     <span class="dot-sep"></span>
                     {% if admin_is_autonomous %}
@@ -347,6 +347,7 @@
                     <span>MAJ <span id="lastUpd">{{ last_update|date:"H:i" }}</span></span>
                     {% endif %}
                 </div>
+                <button type="button" id="rpReset" style="display:none;margin-top:8px;cursor:pointer;border:0;background:#dc2626;color:#fff;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:500">↩ Tout afficher</button>
             </div>
         </div>
 
@@ -402,9 +403,9 @@
                         <h4>Score routier · synthèse</h4>
                         <small>Sur l'ensemble des zones filtrées</small>
                     </div>
-                    <span class="rp-pill">{{ avg_road_score }}/100</span>
+                    <span class="rp-pill" id="rpRoadPill">{{ avg_road_score }}/100</span>
                 </div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:12px;color:var(--ink-2)">
+                <div id="rpRoadStats" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:12px;color:var(--ink-2)">
                     <div><b style="color:var(--ink);font-size:14px;display:block">{{ total_roads }}</b>Routes</div>
                     <div><b style="color:var(--ink);font-size:14px;display:block">{{ critical_roads }}</b>En alerte</div>
                     <div><b style="color:var(--ink);font-size:14px;display:block">{{ total_floods }}</b>Inondations</div>
