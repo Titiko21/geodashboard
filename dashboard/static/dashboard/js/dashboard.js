@@ -35,6 +35,7 @@ let _alertInterval = null;
 
 /* Zone courante — lue depuis l'URL au démarrage, utilisée partout */
 var _activeZoneCode = (new URLSearchParams(window.location.search)).get('zone') || '';
+var _activeAdminFilter = (new URLSearchParams(window.location.search)).get('admin') || '';
 
 const layerVis = { roads: true, floods: true, vegetation: true };
 const layerRef = {
@@ -276,7 +277,7 @@ function initEventListeners() {
    CARTE — initialisation Leaflet
 ══════════════════════════════════════════════════════════ */
 
-function initMap(lat, lng) {
+function initMap(lat, lng, bounds) {
   if (typeof L === 'undefined') {
     console.error('[GéoDash] Leaflet non disponible.');
     var el = document.getElementById('map');
@@ -312,7 +313,13 @@ function initMap(lat, lng) {
   lFloods = L.layerGroup().addTo(map);
   lVeg = L.layerGroup().addTo(map);
 
-  map.setView([_initLat, _initLng], 9);
+  // Cadre sur l'entité admin sélectionnée si son emprise est fournie, sinon
+  // vue par défaut. C'est ce qui « conduit à la zone » au clic.
+  if (bounds && bounds.length === 2) {
+    map.fitBounds(bounds, { padding: [30, 30], maxZoom: 13 });
+  } else {
+    map.setView([_initLat, _initLng], 9);
+  }
   _mapReady = true;
 
   // Coordonnées + zoom (bas-droite carte) — branché ici car nécessite `map`
@@ -325,10 +332,15 @@ function initMap(lat, lng) {
     }, 150);
   });
 
-  /* Chargement async des géométries. SANS zone sélectionnée, on NE charge
-     PAS toutes les données (≈128k routes = page figée) : on laisse
-     l'utilisateur cliquer une commune pour voir uniquement SES données. */
-  if (_activeZoneCode) {
+  /* Chargement async des géométries selon le filtre de l'URL. Priorité au
+     filtre admin (?admin=level:code) — sinon le clic sidebar rechargeait la
+     page sans jamais charger les données de la zone. SANS aucun filtre, on ne
+     charge PAS tout (≈128k routes = page figée). */
+  if (_activeAdminFilter) {
+    _zoneSelCode = _activeAdminFilter.indexOf(':') >= 0
+                 ? _activeAdminFilter.split(':')[1] : null;   // surbrillance de la zone
+    _loadMapData(null, _activeAdminFilter);
+  } else if (_activeZoneCode) {
     _loadMapData(_activeZoneCode);
   } else {
     _hideOverlay();

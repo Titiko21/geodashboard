@@ -639,6 +639,7 @@
 {{ chart_floods_json|json_script:"gd-chart-floods" }}
 {{ center_lat_json|json_script:"gd-center-lat" }}
 {{ center_lng_json|json_script:"gd-center-lng" }}
+{{ admin_bounds_json|json_script:"gd-admin-bounds" }}
 {{ avg_score_json|json_script:"gd-avg-score" }}
 {{ zones_markers_json|json_script:"gd-zones-markers" }}
 
@@ -657,10 +658,11 @@
     var AVG_SCORE    = readJson('gd-avg-score',      0);
     var CENTER_LAT   = readJson('gd-center-lat',     0);
     var CENTER_LNG   = readJson('gd-center-lng',     0);
+    var ADMIN_BOUNDS = readJson('gd-admin-bounds', null);
 
     document.addEventListener('DOMContentLoaded', function () {
         if (typeof initEventListeners === 'function') initEventListeners();
-        if (typeof initMap === 'function') initMap(CENTER_LAT, CENTER_LNG);
+        if (typeof initMap === 'function') initMap(CENTER_LAT, CENTER_LNG, ADMIN_BOUNDS);
         if (typeof initCharts === 'function') initCharts(CHART_ROUTES, CHART_FLOODS, AVG_SCORE);
         if (typeof refreshAlerts === 'function') {
             _alertInterval = setInterval(refreshAlerts, 60000);

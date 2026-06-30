@@ -403,6 +403,16 @@ def dashboard(request):
     center_lat = _js_num(selected_zone.lat_center if selected_zone else 5.35)
     center_lng = _js_num(selected_zone.lng_center if selected_zone else -4.00)
 
+    # Recentrage/cadrage sur l'entité admin sélectionnée (commune, sous-préf,
+    # district…) : sans ça, le clic filtre les données mais laisse la carte au
+    # cadrage par défaut → effet "données éparpillées / mauvaise zone".
+    admin_bounds = None
+    if admin_obj is not None and getattr(admin_obj, "geom", None) is not None:
+        xmin, ymin, xmax, ymax = admin_obj.geom.extent
+        admin_bounds = [[ymin, xmin], [ymax, xmax]]    # [[S,W],[N,E]] pour Leaflet
+        _c = admin_obj.geom.centroid
+        center_lat, center_lng = _js_num(_c.y), _js_num(_c.x)
+
     alerts = Alert.objects.filter(
         zone=selected_zone, is_read=False
     ).order_by("-created_at")[:20] if selected_zone else \
@@ -517,6 +527,7 @@ def dashboard(request):
        "avg_score_json":    avg_score,
        "center_lat_json":   center_lat,
         "center_lng_json":   center_lng,
+        "admin_bounds_json": admin_bounds,
         "avg_road_score":  avg_score,
         "total_roads":     total_roads,
         "critical_roads":  critical_roads,
