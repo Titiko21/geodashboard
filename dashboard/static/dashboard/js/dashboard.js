@@ -337,9 +337,11 @@ function initMap(lat, lng) {
   /* Markers communes (cliquables, popup détaillé) */
   loadZoneMarkers();
 
-  /* Frontières de communes cliquables sur le fond de carte :
-     clic → recharge la carte filtrée à cette seule commune. */
+  /* Frontières administratives cliquables sur le fond de carte (adaptées au
+     zoom : sous-préfectures/communes en détail, districts en vue pays). Clic
+     → recharge la carte filtrée à cette seule zone. Rechargées au déplacement. */
   _loadClickableZones();
+  map.on('moveend zoomend', _scheduleZonesReload);
 
   /* GEE — overlays NDVI/SAR : opt-in via chips (toggleOverlay).
      Pas de chargement automatique pour ne pas saturer la carte au boot
@@ -1321,42 +1323,66 @@ function _zoneStyleFor(code) {
   return code === _zoneSelCode ? _ZONE_STYLE.selected : _ZONE_STYLE.dimmed;
 }
 
+/* Niveau de découpage selon le zoom : districts quand on dézoome (vue pays,
+   14 entités), sous-préfectures + communes quand on est zoomé (détail). */
+function _zonesLevelForZoom() {
+  var z = map ? map.getZoom() : 9;
+  return z < 9 ? 'district' : 'sousprefecture,commune';
+}
+
+function _mapBboxParam() {
+  var b = map.getBounds();
+  return [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]
+    .map(function (x) { return x.toFixed(4); }).join(',');
+}
+
+let _zonesReqKey = null;   // clé (niveau|bbox) du dernier chargement — dédup
+
 function _loadClickableZones() {
   if (!map || !_mapReady) return Promise.resolve();
-  return fetch('/api/admin/divisions/?level=commune', {
-    headers: _apiHeaders(), credentials: 'same-origin', redirect: 'manual',
-  })
+  var level   = _zonesLevelForZoom();
+  var useBbox = (level !== 'district');   // district = 14 entités → on charge tout une fois
+  var bbox    = useBbox ? _mapBboxParam() : '';
+  var key     = level + '|' + (useBbox ? bbox : 'all');
+  if (key === _zonesReqKey) return Promise.resolve();   // rien de pertinent n'a changé
+  _zonesReqKey = key;
+
+  var url = '/api/admin/divisions/?level=' + encodeURIComponent(level)
+          + (bbox ? '&bbox=' + encodeURIComponent(bbox) : '');
+  return fetch(url, { headers: _apiHeaders(), credentials: 'same-origin', redirect: 'manual' })
     .then(function (r) {
       if (r.type === 'opaqueredirect' || r.status === 401 || r.status === 403) return Promise.reject('session');
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
     })
     .then(function (data) {
-      if (!data || !data.features || !data.features.length) return;
+      if (!data || !data.features) return;
       if (lZones) { map.removeLayer(lZones); lZones = null; }
       lZones = L.geoJSON(data, {
         style: function (f) { return _zoneStyleFor(f.properties.code); },
         onEachFeature: function (feature, layer) {
           var p = feature.properties;
           layer.bindTooltip(p.name, { sticky: true, direction: 'center' });
-          layer.on('mouseover', function () {
-            if (_zoneSelCode !== p.code) layer.setStyle(_ZONE_STYLE.hover);
-          });
-          layer.on('mouseout', function () { layer.setStyle(_zoneStyleFor(p.code)); });
-          layer.on('click', function (e) {
-            L.DomEvent.stop(e);
-            _selectZone(p, layer);
-          });
+          layer.on('mouseover', function () { if (_zoneSelCode !== p.code) layer.setStyle(_ZONE_STYLE.hover); });
+          layer.on('mouseout',  function () { layer.setStyle(_zoneStyleFor(p.code)); });
+          layer.on('click', function (e) { L.DomEvent.stop(e); _selectZone(p, layer); });
         },
       }).addTo(map);
-      // Sous les routes : un clic sur une route ouvre son popup, un clic dans
-      // le vide d'une commune sélectionne la zone.
+      // Sous les routes : clic sur une route = popup, clic dans le vide = sélection zone.
       lZones.bringToBack();
     })
     .catch(function (err) {
       if (err === 'session') return;
+      _zonesReqKey = null;
       console.warn('[Zones] échec :', err);
     });
+}
+
+/* Recharge debouncée des frontières au déplacement / zoom de la carte. */
+let _zonesReloadTimer = null;
+function _scheduleZonesReload() {
+  clearTimeout(_zonesReloadTimer);
+  _zonesReloadTimer = setTimeout(_loadClickableZones, 350);
 }
 
 function _selectZone(props, layer) {
@@ -1364,7 +1390,7 @@ function _selectZone(props, layer) {
   if (lZones) lZones.eachLayer(function (l) {
     if (l.feature && l.feature.properties) l.setStyle(_zoneStyleFor(l.feature.properties.code));
   });
-  _loadMapData(null, 'commune:' + props.code);   // données de cette seule commune
+  _loadMapData(null, (props.level || 'commune') + ':' + props.code);   // données de cette seule zone
   try { map.fitBounds(layer.getBounds(), { padding: [24, 24], maxZoom: 14 }); } catch (e) {}
   _showZoneBanner(props.name);
 }

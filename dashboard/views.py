@@ -875,21 +875,37 @@ def api_admin_divisions(request):
                            }),
     }
 
-    level = request.GET.get("level", "district")
-    if level == "all":
+    raw_level = request.GET.get("level", "district")
+    if raw_level == "all":
         wanted = list(LEVELS)
-    elif level in LEVELS:
-        wanted = [level]
     else:
-        return JsonResponse(
-            {"error": "level invalide. Attendu : " + ", ".join(list(LEVELS) + ["all"])},
-            status=400,
-        )
+        wanted = [s.strip() for s in raw_level.split(",") if s.strip()]
+        if not wanted or any(l not in LEVELS for l in wanted):
+            return JsonResponse(
+                {"error": "level invalide. Attendu : " + ", ".join(list(LEVELS) + ["all"])},
+                status=400,
+            )
+
+    # Emprise visible optionnelle : ?bbox=W,S,E,N (WGS84). Ne renvoie que les
+    # entités intersectant la fenêtre — indispensable pour les niveaux fins
+    # (sous-préfecture = ~7 Mo en entier) : on ne charge que ce qui est visible.
+    bbox_poly = None
+    raw_bbox = request.GET.get("bbox", "")
+    if raw_bbox:
+        try:
+            from django.contrib.gis.geos import Polygon as GEOSPolygon
+            w, s, e, n = [float(x) for x in raw_bbox.split(",")]
+            bbox_poly = GEOSPolygon.from_bbox((w, s, e, n))
+            bbox_poly.srid = 4326
+        except (ValueError, TypeError):
+            return JsonResponse({"error": "bbox attendu : W,S,E,N"}, status=400)
 
     features = []
     for lv in wanted:
         Model, related, parent_props = LEVELS[lv]
         qs = Model.objects.filter(geom__isnull=False)
+        if bbox_poly is not None:
+            qs = qs.filter(geom__intersects=bbox_poly)
         if related:
             qs = qs.select_related(*related)
         for o in qs:
