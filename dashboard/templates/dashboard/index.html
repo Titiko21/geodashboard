@@ -164,30 +164,25 @@
                         <span class="tree-label"><b>Côte d'Ivoire</b></span>
                         <span class="tree-count">{{ total_zones_count }}</span>
                     </div>
-                    {% for node in admin_tree %}
-                        {% if node.unclassified %}
-                            <div class="tree-row tree-row-district" data-tree-toggle>
-                                <span class="caret"><svg width="11" height="11" aria-hidden="true"><use href="#i-chev"></use></svg></span>
-                                <span class="tree-label" style="color:var(--ink-3);font-style:italic">Non classées</span>
-                                <span class="tree-count">{{ node.zones|length }}</span>
-                            </div>
-                        {% else %}
-                            <div class="tree-row tree-row-district {% if node.select_value == admin_filter_value %}selected{% endif %}"
-                                 data-admin-value="{{ node.select_value }}"
-                                 data-tree-toggle>
-                                <span class="caret {% if node.select_value == admin_filter_value %}open{% endif %}">
-                                    <svg width="11" height="11" aria-hidden="true"><use href="#i-chev"></use></svg>
-                                </span>
-                                <span class="tree-label">{{ node.district.name }}{% if node.district.is_autonomous %} <small style="color:var(--ink-3);font-weight:500">(autonome)</small>{% endif %}</span>
-                                <span class="tree-count">{{ node.zones|length }}</span>
-                            </div>
-                        {% endif %}
-                        <div class="tree-children" {% if node.select_value != admin_filter_value %}style="display:none"{% endif %}>
-                            {% for zn in node.zones %}
-                            <div class="tree-row tree-row-zone {% if zn.zone.code == zone_code %}selected{% endif %}"
-                                 data-admin-value="{{ zn.select_value }}">
+                    {% for cat in admin_categories %}
+                        <div class="tree-row tree-row-district" data-tree-toggle>
+                            <span class="caret {% if cat.open %}open{% endif %}">
+                                <svg width="11" height="11" aria-hidden="true"><use href="#i-chev"></use></svg>
+                            </span>
+                            <span class="tree-label">{{ cat.label }}</span>
+                            <span class="tree-count">{{ cat.count }}</span>
+                        </div>
+                        <div class="tree-children" {% if not cat.open %}style="display:none"{% endif %}>
+                            {% for e in cat.entities %}
+                            <div class="tree-row tree-row-zone {% if e.select_value == admin_filter_value %}selected{% endif %}"
+                                 data-admin-value="{{ e.select_value }}">
                                 <span class="caret"></span>
-                                <span class="tree-label">{{ zn.zone.name }}</span>
+                                <span class="tree-label">{{ e.name }}</span>
+                            </div>
+                            {% empty %}
+                            <div class="tree-row tree-row-zone" style="opacity:.55;font-style:italic">
+                                <span class="caret"></span>
+                                <span class="tree-label">— aucune entité —</span>
                             </div>
                             {% endfor %}
                         </div>

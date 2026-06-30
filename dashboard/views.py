@@ -318,6 +318,42 @@ def _build_admin_tree(districts, all_zones):
     return nodes
 
 
+def _build_admin_categories(admin_filter_value=""):
+    """
+    Sépare les entités du découpage en CATÉGORIES par type (Villes, Communes,
+    Districts, Régions, Départements, Sous-préfectures) pour le panneau latéral.
+    Chaque entité porte `select_value` ("level:code") → un clic applique le
+    filtre admin exact. La catégorie contenant l'entité sélectionnée est ouverte ;
+    Villes / Communes le sont par défaut (entités de tête, peu nombreuses).
+    """
+    from admin_divisions.models import (
+        Commune, Departement, District, Region, SousPrefecture, Ville,
+    )
+    specs = [
+        ("Villes",           "ville",          Ville,          True),
+        ("Communes",         "commune",        Commune,        True),
+        ("Districts",        "district",       District,       False),
+        ("Régions",          "region",         Region,         False),
+        ("Départements",     "departement",    Departement,    False),
+        ("Sous-préfectures", "sousprefecture", SousPrefecture, False),
+    ]
+    cats = []
+    for label, level, Model, open_default in specs:
+        entities = [
+            {"name": name, "code": code, "select_value": f"{level}:{code}"}
+            for code, name in Model.objects.order_by("name").values_list("code", "name")
+        ]
+        has_selected = any(e["select_value"] == admin_filter_value for e in entities)
+        cats.append({
+            "label":    label,
+            "level":    level,
+            "entities": entities,
+            "count":    len(entities),
+            "open":     open_default or has_selected,
+        })
+    return cats
+
+
 # ── Vue principale ─────────────────────────────────────────────────────────────
 
 def dashboard(request):
@@ -449,10 +485,9 @@ def dashboard(request):
         except Exception:
             admin_surface_km2 = None
 
-    # Arbre hiérarchique pour le panneau gauche (CI > District > Zone)
-    # Utilise TOUTES les zones (170) pas seulement la version filtrée, car
-    # l'arbre montre la structure complète quel que soit le filtre courant.
-    admin_tree = _build_admin_tree(districts, Zone.objects.all().order_by("name"))
+    # Panneau gauche : entités groupées par CATÉGORIE de type (Villes,
+    # Communes, Districts, Régions, Départements, Sous-préfectures).
+    admin_categories = _build_admin_categories(admin_filter_value)
     total_zones_count = Zone.objects.count()
 
     # Markers points (lat/lng) pour la couche commune cliquable de la carte.
@@ -469,7 +504,7 @@ def dashboard(request):
         "zone_code":           zone_code,
         "districts":           districts,
         "regions":             regions,
-        "admin_tree":          admin_tree,
+        "admin_categories":    admin_categories,
         "total_zones_count":   total_zones_count,
         "admin_filter_value":  admin_filter_value,
         "admin_label":         admin_label,
