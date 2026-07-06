@@ -298,7 +298,7 @@ function loadLandUseBreakdown() {
         if (src) src.textContent = 'Donnée non disponible';
         return;
       }
-      if (src) src.textContent = data.source || 'Google Dynamic World';
+      if (src) src.textContent = 'Analyse satellite · 6 derniers mois';
       ['urban', 'cropland', 'forest', 'water', 'bare'].forEach(function (key) {
         var pct = (data[key] != null) ? data[key] : 0;
         var bar = card.querySelector('[data-lu="' + key + '"]');

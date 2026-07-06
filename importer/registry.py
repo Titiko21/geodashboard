@@ -69,6 +69,42 @@ def _commune_accept(inputs):
     return True, ""
 
 
+# ── Cible « flood_event » — historique des inondations observées ───────────
+
+def _parse_event_date(raw):
+    from datetime import datetime
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _event_code(inputs):
+    from admin_divisions._geo_utils import normalize_name
+    slug = normalize_name(inputs["name"]).upper().replace(" ", "-")[:40]
+    date = (inputs.get("date") or "").replace("/", "-")
+    return f"EVT-{slug}" + (f"-{date}" if date else "")
+
+
+register(TargetSpec(
+    name="flood_event",
+    app_model="flood.FloodEvent",
+    key_field="code",
+    required_inputs=("name",),
+    geometry_field="geom",
+    geometry_label="ponctuelle ou polygonale",
+    normalize_geometry=lambda g: g,   # point OU polygone acceptés
+    build_key=lambda inputs: {"code": _event_code(inputs)},
+    build_defaults=lambda inputs: {
+        "name":   inputs["name"],
+        "date":   _parse_event_date(inputs.get("date")),
+        "source": inputs.get("source") or "",
+    },
+))
+
+
 register(TargetSpec(
     name="commune",
     app_model="admin_divisions.Commune",

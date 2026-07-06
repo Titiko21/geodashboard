@@ -1,32 +1,36 @@
 """
 Scoring de susceptibilité aux inondations — logique pure, testable sans DB.
 
-Modèle à 2 couches (décision 2026-07-06) :
-  1. SUSCEPTIBILITÉ STATIQUE (ce module) : croisement pondéré de facteurs
-     physiographiques stables. C'est la couche implémentée en Phase C.
-  2. Déclencheur dynamique (pluie SODEXAM/CHIRPS) : phase ultérieure —
-     modulera la susceptibilité pour donner le risque opérationnel.
+v2 (2026-07-06) — corrige la dilution par moyenne communale :
+  Le v1 moyennait altitude/HAND/pente sur TOUTE la commune : les bas-fonds
+  urbanisés (vallées de Cocody…) se diluaient dans le plateau. Le v2 score
+  des FRACTIONS de territoire et l'EXPOSITION du bâti, et intègre
+  l'HISTORIQUE des inondations observées (couche FloodEvent importable).
 
-Facteurs v1 (résolution 30-90 m — susceptibilité de QUARTIER/COMMUNE ;
-l'analyse par rue nécessitera un MNT fin ≤ 12 m) :
+Facteurs v2 :
+  hand_low    % du territoire en zone basse (HAND < 5 m) — bas-fonds.
+  exposure    % du BÂTI situé en zone basse — quartiers construits dans
+              les vallées/bas-fonds (le facteur « Cocody »).
+  history     Événements d'inondation observés dans la commune
+              (couche FloodEvent — vérité terrain, importable).
+  elevation   Altitude moyenne — communes littorales basses.
+  impervious  % bâti — imperméabilisation, ruissellement.
+  water       % eau de surface — proximité plans d'eau.
+  flat        % du territoire quasi plat (pente < 2°) — évacuation lente.
 
-  hand        HAND (hauteur au-dessus du drainage, MERIT Hydro 90 m) —
-              le meilleur prédicteur des zones basses accumulatrices.
-  elevation   Altitude moyenne (Copernicus GLO-30) — zones côtières basses.
-  slope       Pente moyenne — plate = évacuation lente.
-  impervious  % bâti (Dynamic World) — imperméabilisation, ruissellement.
-  water       % eau de surface (Dynamic World) — proximité plans d'eau.
-
-PONDÉRATIONS PROVISOIRES (type AHP). À recalibrer avec la pluie SODEXAM,
-la détection SAR et les observations terrain (Kobo) quand disponibles.
+PONDÉRATIONS PROVISOIRES (somme = 1 quand tout est disponible ; les
+facteurs absents sont exclus et les poids renormalisés). À recalibrer
+avec la pluie SODEXAM et les relevés terrain.
 """
 
 WEIGHTS = {
-    "hand":       0.35,
-    "elevation":  0.15,
-    "slope":      0.15,
-    "impervious": 0.20,
-    "water":      0.15,
+    "hand_low":   0.20,
+    "exposure":   0.17,
+    "history":    0.20,
+    "elevation":  0.12,
+    "impervious": 0.12,
+    "water":      0.12,
+    "flat":       0.07,
 }
 
 LEVELS = [
@@ -37,52 +41,59 @@ LEVELS = [
 ]
 
 
-def _linear_desc(value, at_100, at_0):
-    """Score 0-100 décroissant linéairement : `at_100` → 100, `at_0` → 0."""
-    if value is None:
-        return None
-    if value <= at_100:
-        return 100.0
-    if value >= at_0:
-        return 0.0
-    return round(100.0 * (at_0 - value) / (at_0 - at_100), 1)
+def _clamp(v):
+    return round(max(0.0, min(100.0, v)), 1)
 
 
-def score_hand(hand_m):
-    """0 m au-dessus du drainage → 100 ; ≥ 15 m → 0."""
-    return _linear_desc(hand_m, 0.0, 15.0)
+def score_hand_low(pct):
+    """% de territoire en zone basse, amplifié ×2 (50 % de bas-fonds = max)."""
+    return None if pct is None else _clamp(pct * 2.0)
+
+
+def score_exposure(pct):
+    """% du bâti en zone basse, amplifié ×2 (50 % du bâti exposé = max)."""
+    return None if pct is None else _clamp(pct * 2.0)
+
+
+def score_history(n_events):
+    """Événements observés : 1 → 25 … 4+ → 100. Vérité terrain prioritaire."""
+    return None if n_events is None else _clamp(n_events * 25.0)
 
 
 def score_elevation(elevation_m):
     """≤ 2 m d'altitude → 100 ; ≥ 60 m → 0 (littoral lagunaire d'Abidjan)."""
-    return _linear_desc(elevation_m, 2.0, 60.0)
-
-
-def score_slope(slope_deg):
-    """Terrain plat (0°) → 100 ; pente ≥ 10° → 0."""
-    return _linear_desc(slope_deg, 0.0, 10.0)
+    if elevation_m is None:
+        return None
+    if elevation_m <= 2.0:
+        return 100.0
+    if elevation_m >= 60.0:
+        return 0.0
+    return round(100.0 * (60.0 - elevation_m) / 58.0, 1)
 
 
 def score_impervious(urban_pct):
     """% bâti → score direct (imperméabilisation)."""
-    if urban_pct is None:
-        return None
-    return round(max(0.0, min(100.0, urban_pct)), 1)
+    return None if urban_pct is None else _clamp(urban_pct)
 
 
 def score_water(water_pct):
     """% eau de surface, amplifié ×4 (25 % d'eau = exposition maximale)."""
-    if water_pct is None:
-        return None
-    return round(max(0.0, min(100.0, water_pct * 4.0)), 1)
+    return None if water_pct is None else _clamp(water_pct * 4.0)
+
+
+def score_flat(pct):
+    """% du territoire quasi plat (< 2°) → score direct."""
+    return None if pct is None else _clamp(pct)
 
 
 _SCORERS = {
-    "hand":       score_hand,
-    "elevation":  score_elevation,
-    "slope":      score_slope,
-    "impervious": score_impervious,
-    "water":      score_water,
+    "hand_low":   ("hand_low_pct",     score_hand_low),
+    "exposure":   ("built_low_pct",    score_exposure),
+    "history":    ("history_events",   score_history),
+    "elevation":  ("elevation_mean_m", score_elevation),
+    "impervious": ("urban_pct",        score_impervious),
+    "water":      ("water_pct",        score_water),
+    "flat":       ("flat_pct",         score_flat),
 }
 
 
@@ -97,24 +108,16 @@ def compute(factors):
     """
     Croise les facteurs bruts en un indice de susceptibilité 0-100.
 
-    `factors` : dict avec (tous optionnels, None si indisponible)
-        hand_mean_m, elevation_mean_m, slope_mean_deg, urban_pct, water_pct
+    `factors` : dict (clés cf. _SCORERS, valeurs None si indisponibles).
+    Les facteurs absents sont exclus et les pondérations renormalisées.
 
-    Les facteurs absents sont exclus et les pondérations renormalisées sur
-    les facteurs disponibles (résultat toujours comparable 0-100).
-
-    Renvoie {"scores": {facteur: sous-score|None}, "susceptibility": float,
-             "level": str} — ou None si AUCUN facteur n'est disponible.
+    Renvoie {"scores": {...}, "susceptibility": float, "level": str},
+    ou None si AUCUN facteur n'est disponible.
     """
-    raw = {
-        "hand":       factors.get("hand_mean_m"),
-        "elevation":  factors.get("elevation_mean_m"),
-        "slope":      factors.get("slope_mean_deg"),
-        "impervious": factors.get("urban_pct"),
-        "water":      factors.get("water_pct"),
+    scores = {
+        name: scorer(factors.get(key))
+        for name, (key, scorer) in _SCORERS.items()
     }
-    scores = {name: _SCORERS[name](value) for name, value in raw.items()}
-
     available = {n: s for n, s in scores.items() if s is not None}
     if not available:
         return None

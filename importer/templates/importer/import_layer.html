@@ -1,0 +1,74 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<div style="max-width:760px">
+  <h1>Importer une couche géospatiale</h1>
+  <p style="color:#666">
+    Formats : GeoJSON, GeoPackage, Shapefile (déposer .shp + .dbf + .shx + .prj ensemble), KML.
+    L'import est <b>idempotent</b> : rejouer un fichier ne crée pas de doublon.
+    Cibles disponibles : <code>{{ targets|join:", " }}</code>.
+  </p>
+
+  {% if error %}
+    <p style="background:#fdecea;border:1px solid #e0b4b4;padding:10px 14px;border-radius:6px">
+      <b>Erreur :</b> {{ error }}
+    </p>
+  {% endif %}
+
+  {% if report %}
+    <div style="background:{% if report.dry_run %}#fff8e1{% else %}#e8f5e9{% endif %};border:1px solid #cfd8dc;padding:12px 16px;border-radius:6px;margin-bottom:16px">
+      <b>{% if report.dry_run %}Aperçu (rien n'a été écrit){% else %}Import terminé{% endif %}</b><br>
+      Créées : <b>{{ report.created }}</b> ·
+      Mises à jour : <b>{{ report.updated }}</b> ·
+      Ignorées : <b>{{ report.skipped|length }}</b>
+      {% if report.skipped %}
+        <ul style="margin:8px 0 0">
+        {% for label, reason in report.skipped %}
+          <li><b>{{ label }}</b> — {{ reason }}</li>
+        {% endfor %}
+        </ul>
+      {% endif %}
+    </div>
+    {% if log %}
+      <details><summary>Journal détaillé ({{ log|length }} lignes)</summary>
+        <pre style="background:#f5f5f5;padding:10px;border-radius:6px;font-size:12px;overflow:auto">{% for line in log %}{{ line }}
+{% endfor %}</pre>
+      </details>
+    {% endif %}
+  {% endif %}
+
+  <form method="post" enctype="multipart/form-data"
+        style="display:flex;flex-direction:column;gap:14px;margin-top:16px">
+    {% csrf_token %}
+    <div>
+      <label><b>1. Fichier(s) de données</b></label><br>
+      <input type="file" name="data_files" multiple required>
+    </div>
+    <div>
+      <label><b>2. Mapping</b> (colonnes du fichier → champs de la cible)</label><br>
+      <select name="mapping_choice">
+        <option value="">— choisir un mapping livré —</option>
+        {% for m in mappings %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+      </select>
+      &nbsp;ou déposer un mapping JSON :
+      <input type="file" name="mapping_file" accept=".json">
+    </div>
+    <div>
+      <label>
+        <input type="checkbox" name="dry_run" checked>
+        <b>Aperçu seul (dry-run)</b> — décocher pour importer réellement
+      </label>
+    </div>
+    <div>
+      <input type="submit" value="Lancer" class="default" style="padding:8px 22px">
+    </div>
+  </form>
+
+  <p style="color:#888;font-size:12px;margin-top:20px">
+    Exemple de mapping : <code>{"target": "flood_event", "columns":
+    {"name": ["NOM", "quartier"], "date": ["DATE"], "source": ["SOURCE"]}}</code><br>
+    Les exports (CSV / GeoJSON) se font depuis les listes de l'admin —
+    sélectionnez des lignes puis choisissez l'action « Exporter ».
+  </p>
+</div>
+{% endblock %}

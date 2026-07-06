@@ -3,8 +3,12 @@ from django.contrib import admin
 from django.urls import path, include
 
 from dashboard.health import health_check
+from importer.admin_views import import_layer_view
 
 urlpatterns = [
+    # Gestion des données : import de couches via l'admin (avant admin.site.urls
+    # pour ne pas être avalé par son catch-all).
+    path('admin/import-couches/', import_layer_view, name='admin_import_layer'),
     path('admin/', admin.site.urls),
     # Health check complet (DB + DNS + GEE + stats), utilisé par le
     # healthcheck Docker et le monitoring. Voir dashboard/health.py.
