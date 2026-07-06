@@ -927,7 +927,7 @@ def api_admin_divisions(request):
         "sousprefecture": (SousPrefecture, ("departement",), lambda o: {"departement": o.departement.name}),
         "ville":          (Ville, ("district",), lambda o: {"district": o.district.name}),
         "commune":        (Commune, ("district", "ville"), lambda o: {
-                               "district": o.district.name,
+                               "district": o.district.name if o.district_id else None,
                                "ville":    o.ville.name if o.ville_id else None,
                            }),
     }

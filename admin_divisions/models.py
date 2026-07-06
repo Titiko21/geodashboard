@@ -183,14 +183,13 @@ class Commune(models.Model):
     """
     Commune (197) — collectivité locale décentralisée.
 
-    Rattachée obligatoirement à un District. Les autres niveaux (Région,
-    Département, Sous-préfecture) sont nullable pour gérer :
-      - les communes des districts autonomes (Abidjan : 13, Yamoussoukro : 1),
-      - les communes rurales qui chevauchent plusieurs sous-préfectures.
+    Tous les niveaux de rattachement (District, Région, Département,
+    Sous-préfecture, Ville) sont nullable : les communes sont importées
+    seules depuis le GeoJSON (seule source de données actuelle), la
+    hiérarchie sera raccrochée plus tard lors des imports BDR.
 
-    `geom` peut être un Point (centroïde, source dashboard.Zone) ou un
-    polygone (frontière OSM `admin_level=8`). On utilise `GeometryField`
-    générique pour accepter les deux formes.
+    `geom` peut être un Point (centroïde) ou un polygone. On utilise
+    `GeometryField` générique pour accepter les deux formes.
     """
 
     code             = models.CharField(max_length=30, unique=True, verbose_name="Code")
@@ -198,7 +197,7 @@ class Commune(models.Model):
 
     district         = models.ForeignKey(
                            District, on_delete=models.PROTECT, related_name="communes",
-                           verbose_name="District",
+                           null=True, blank=True, verbose_name="District",
                        )
     region           = models.ForeignKey(
                            Region, on_delete=models.PROTECT, related_name="communes",
