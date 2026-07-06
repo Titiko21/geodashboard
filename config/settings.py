@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'dashboard',
     'admin_divisions',
     'importer',
+    'flood',
 ]
 
 MIDDLEWARE = [

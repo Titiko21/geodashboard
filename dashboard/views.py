@@ -919,6 +919,17 @@ def api_admin_divisions(request):
         Commune, Departement, District, Region, SousPrefecture, Ville,
     )
 
+    def _commune_props(o):
+        props = {
+            "district": o.district.name if o.district_id else None,
+            "ville":    o.ville.name if o.ville_id else None,
+        }
+        # Susceptibilité inondation (app flood) si calculée pour la commune.
+        fs = getattr(o, "flood_susceptibility", None)
+        props["flood_susceptibility"] = fs.susceptibility if fs else None
+        props["flood_level"] = fs.level if fs else None
+        return props
+
     # level → (Model, select_related, fonction de propriétés "parent")
     LEVELS = {
         "district":       (District, (), lambda o: {"is_autonomous": o.is_autonomous}),
@@ -926,10 +937,7 @@ def api_admin_divisions(request):
         "departement":    (Departement, ("district",), lambda o: {"district": o.district.name}),
         "sousprefecture": (SousPrefecture, ("departement",), lambda o: {"departement": o.departement.name}),
         "ville":          (Ville, ("district",), lambda o: {"district": o.district.name}),
-        "commune":        (Commune, ("district", "ville"), lambda o: {
-                               "district": o.district.name if o.district_id else None,
-                               "ville":    o.ville.name if o.ville_id else None,
-                           }),
+        "commune":        (Commune, ("district", "ville"), _commune_props),
     }
 
     raw_level = request.GET.get("level", "district")

@@ -15,4 +15,7 @@ if getattr(settings, 'KEYCLOAK_ENABLED', False):
     # Fournit /oidc/authenticate/, /oidc/callback/, /oidc/logout/
     urlpatterns += [path('oidc/', include('mozilla_django_oidc.urls'))]
 
-urlpatterns += [path('', include('dashboard.urls'))]
+urlpatterns += [
+    path('', include('dashboard.urls')),
+    path('', include('flood.urls')),
+]
