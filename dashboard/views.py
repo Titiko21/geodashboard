@@ -508,10 +508,34 @@ def dashboard(request):
         for z in zones
     ]
 
+    # ── Susceptibilité inondation (app flood) ───────────────────────────
+    from admin_divisions.models import Commune as _Commune
+    from flood.models import CommuneFloodSusceptibility
+    flood_rows = list(
+        CommuneFloodSusceptibility.objects.select_related("commune")
+        .order_by("-susceptibility")
+    )
+    flood_avg = (
+        round(sum(r.susceptibility for r in flood_rows) / len(flood_rows), 1)
+        if flood_rows else None
+    )
+    flood_risk_count = sum(1 for r in flood_rows if r.level in ("eleve", "critique"))
+    flood_profile = None
+    if admin_level == "commune" and admin_obj is not None:
+        flood_profile = next(
+            (r for r in flood_rows if r.commune_id == admin_obj.id), None
+        )
+    communes_count = _Commune.objects.count()
+
     context = {
         "zones":               zones,
         "selected_zone":       selected_zone,
         "zone_code":           zone_code,
+        "flood_rows":          flood_rows,
+        "flood_avg":           flood_avg,
+        "flood_risk_count":    flood_risk_count,
+        "flood_profile":       flood_profile,
+        "communes_count":      communes_count,
         "districts":           districts,
         "regions":             regions,
         "admin_categories":    admin_categories,
