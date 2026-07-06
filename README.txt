@@ -109,20 +109,28 @@ geodashboard/
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 L'importeur générique (app `importer`) charge n'importe quel fichier
-géospatial vers une couche de l'application, sans écrire de code :
+géospatial vers une couche de l'application, sans écrire de code.
+
+IMPORTANT : toutes les commandes manage.py s'exécutent DANS le conteneur
+(le Python local n'a ni GDAL ni les dépendances). Déposez d'abord votre
+fichier dans le dossier du projet (monté dans le conteneur sous /app),
+par exemple dans un sous-dossier `data_import/`.
 
     # 1. Explorer le fichier (couches, colonnes)
-    python manage.py import_layer --file donnees.gpkg --list-layers
+    docker compose exec web python manage.py import_layer \
+        --file data_import/mon_fichier.gpkg --list-layers
 
     # 2. Écrire un mapping JSON (colonne du fichier → entrée de la cible)
     #    Exemple : importer/mappings/communes_grand_abidjan.json
     #    { "target": "commune", "columns": { "name": ["NOMS", "NOM"] } }
 
     # 3. Prévisualiser (aucune écriture)
-    python manage.py import_layer --file f.geojson --mapping m.json --dry-run
+    docker compose exec web python manage.py import_layer \
+        --file data_import/mon_fichier.geojson --mapping data_import/mon_mapping.json --dry-run
 
     # 4. Importer (idempotent : rejouable sans doublon)
-    python manage.py import_layer --file f.geojson --mapping m.json
+    docker compose exec web python manage.py import_layer \
+        --file data_import/mon_fichier.geojson --mapping data_import/mon_mapping.json
 
 Cibles disponibles (importer/registry.py) : commune.
 Les cibles routes (BDR), drainage, terrain s'ajouteront au fil des phases.
