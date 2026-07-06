@@ -1,0 +1,23 @@
+DÉPOSEZ ICI VOS FICHIERS GÉOSPATIAUX À IMPORTER
+(GeoJSON, Shapefile, GeoPackage…)
+
+Ce dossier est monté dans le conteneur Docker : tout fichier déposé ici
+est immédiatement visible par l'application sous data_import/.
+
+Marche à suivre (dans PowerShell, depuis O:\geodashboard\geedashboard) :
+
+  1. Déposer le fichier ici, ex. data_import\routes.gpkg
+
+  2. Explorer ses couches et colonnes :
+     docker compose exec web python manage.py import_layer --file data_import/routes.gpkg --list-layers
+
+  3. Créer un fichier de mapping JSON ici, ex. data_import\routes_mapping.json :
+     { "target": "commune", "columns": { "name": ["NOMS", "NOM"] } }
+     (target = cible d'import, cf. importer/registry.py ; columns = quelle
+      colonne du fichier alimente quelle entrée de la cible)
+
+  4. Prévisualiser (n'écrit rien) :
+     docker compose exec web python manage.py import_layer --file data_import/routes.gpkg --mapping data_import/routes_mapping.json --dry-run
+
+  5. Importer (rejouable sans doublon) :
+     docker compose exec web python manage.py import_layer --file data_import/routes.gpkg --mapping data_import/routes_mapping.json
