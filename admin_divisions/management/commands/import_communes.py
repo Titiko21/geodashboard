@@ -16,8 +16,7 @@ Modèle (hiérarchie figée) : District → … → Ville → Commune.
 
 Rattachement au district :
   Commune.district / Ville.district sont obligatoires (FK PROTECT). On résout le
-  district parent par NOM (normalisé) parmi les districts existants — pour
-  réutiliser celui qu'aurait créé `import_admin_hdx` (source de référence). S'il
+  district parent par NOM (normalisé) parmi les districts existants. S'il
   manque, on le crée a minima (sans géométrie) avec un avertissement.
 
 Idempotent : `update_or_create` par `code` (CIV-VIL-<SLUG> / CIV-COM-<SLUG>).
@@ -35,7 +34,7 @@ from pathlib import Path
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from admin_divisions._hdx_utils import district_code, normalize_name, to_multipolygon
+from admin_divisions._geo_utils import district_code, normalize_name, to_multipolygon
 from admin_divisions.models import Commune, District, Ville
 
 # Fichier livré avec le dépôt (données reproductibles).
@@ -317,7 +316,7 @@ class Command(BaseCommand):
         # ── Bilan ───────────────────────────────────────────────────────────
         if created_districts:
             self.stdout.write(self.style.WARNING(
-                "\n  Districts créés a minima (à réconcilier via import_admin_hdx) : "
+                "\n  Districts créés a minima (géométrie à compléter ultérieurement) : "
                 + ", ".join(created_districts)
             ))
 

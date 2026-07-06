@@ -13,8 +13,8 @@ Pré-requis : Docker Desktop installé.
     2. docker compose up -d
     3. Ouvrir http://localhost:8000
 
-La première fois, l'entrypoint importe `geodash_dump.sql` si la base est
-vide (170 zones, ~32k segments, ~3.7k inondations, ~3.7k végétation).
+Au démarrage, l'entrypoint applique les migrations puis importe les
+communes du Grand Abidjan (idempotent) — seule source de données actuelle.
 
 Commandes utiles :
 
@@ -27,9 +27,6 @@ Commandes utiles :
     # Rafraîchir les scores satellite à la demande (manuel)
     docker compose exec web python manage.py update_gee_scores
 
-    # Réimporter OSM pour une ville
-    docker compose exec web python manage.py populate_geodata --zone TAB
-
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  STRUCTURE DU PROJET
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -40,8 +37,7 @@ geodashboard/
 ├── docker-compose.yml                   ← Stack : db (postgis), web, keycloak (opt-in)
 ├── docker-compose.override.yml          ← Override dev : bind mount + runserver
 ├── Dockerfile                           ← Image web (Django + GDAL/GEOS/PROJ)
-├── entrypoint.sh                        ← Bootstrap conteneur (migrate + import dump si vide)
-├── geodash_dump.sql                     ← Dump initial (importé une fois si la DB est vide)
+├── entrypoint.sh                        ← Bootstrap conteneur (migrate + import communes)
 ├── docker/
 │   ├── postgres-init/                   ← Scripts d'init DB (PostGIS + DB Keycloak)
 │   └── keycloak/                        ← Import realm Keycloak
@@ -58,12 +54,10 @@ geodashboard/
     ├── auth.py / middleware.py          ← Auth OIDC Keycloak (optionnel)
     ├── health.py                        ← Health check Docker (/health/)
     ├── gee_integration.py               ← Google Earth Engine (Sentinel-1/2, Landsat)
-    ├── traffic_estimator.py             ← Estimation trafic (OSM + VIIRS)
+    ├── _geo_utils.py                    ← Helpers géométriques (GeoJSON → geom, centroïde)
     ├── templates/dashboard/index.html   ← Interface principale
     └── management/commands/
-        ├── populate_geodata.py          ← Import OSM via Overpass
-        ├── update_gee_scores.py         ← Calcul scores satellite par segment
-        └── check_missing.py             ← Diagnostic zones sans données
+        └── update_gee_scores.py         ← Calcul scores satellite par segment
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  FONCTIONNALITÉS

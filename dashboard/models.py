@@ -36,11 +36,6 @@ class RoadSegment(models.Model):
     ]
 
     zone            = models.ForeignKey(Zone, on_delete=models.CASCADE, related_name='roads')
-    osm_id          = models.BigIntegerField(
-                          null=True, blank=True, db_index=True,
-                          verbose_name="ID OpenStreetMap",
-                          help_text="Identifiant unique OSM — clé de mise à jour lors des imports",
-                      )
     name            = models.CharField(max_length=200, verbose_name="Nom")
     status          = models.CharField(max_length=20, choices=STATUS_CHOICES, default='bon')
     condition_score = models.FloatField(help_text="Score de 0 (mauvais) à 100 (excellent)")
@@ -66,16 +61,6 @@ class RoadSegment(models.Model):
         verbose_name        = "Segment routier"
         verbose_name_plural = "Segments routiers"
         ordering            = ['condition_score']
-        constraints         = [
-            models.UniqueConstraint(
-                fields=['zone', 'osm_id'],
-                condition=models.Q(osm_id__isnull=False),
-                name='unique_road_osm_id_per_zone',
-            )
-        ]
-        indexes = [
-            models.Index(fields=['zone', 'osm_id'], name='road_zone_osm_idx'),
-        ]
 
     def __str__(self):
         return f"{self.name} [{self.get_status_display()}]"
@@ -91,11 +76,6 @@ class FloodRisk(models.Model):
     ]
 
     zone          = models.ForeignKey(Zone, on_delete=models.CASCADE, related_name='flood_risks')
-    osm_id        = models.BigIntegerField(
-                        null=True, blank=True, db_index=True,
-                        verbose_name="ID OpenStreetMap",
-                        help_text="Identifiant unique OSM — clé de mise à jour lors des imports",
-                    )
     name          = models.CharField(max_length=200, verbose_name="Nom")
     risk_level    = models.CharField(max_length=20, choices=RISK_CHOICES, default='faible')
     risk_score    = models.FloatField(help_text="Score de risque 0-100")
@@ -112,16 +92,6 @@ class FloodRisk(models.Model):
         verbose_name        = "Zone d'inondation"
         verbose_name_plural = "Zones d'inondation"
         ordering            = ['-risk_score']
-        constraints         = [
-            models.UniqueConstraint(
-                fields=['zone', 'osm_id'],
-                condition=models.Q(osm_id__isnull=False),
-                name='unique_flood_osm_id_per_zone',
-            )
-        ]
-        indexes = [
-            models.Index(fields=['zone', 'osm_id'], name='flood_zone_osm_idx'),
-        ]
 
     def __str__(self):
         return f"{self.name} — {self.get_risk_level_display()}"
@@ -137,11 +107,6 @@ class VegetationDensity(models.Model):
     ]
 
     zone               = models.ForeignKey(Zone, on_delete=models.CASCADE, related_name='vegetation')
-    osm_id             = models.BigIntegerField(
-                             null=True, blank=True, db_index=True,
-                             verbose_name="ID OpenStreetMap",
-                             help_text="Identifiant unique OSM — clé de mise à jour lors des imports",
-                         )
     name               = models.CharField(max_length=200, verbose_name="Nom")
     ndvi_value         = models.FloatField(help_text="NDVI de -1 à 1")
     density_class      = models.CharField(max_length=20, choices=DENSITY_CHOICES)
@@ -160,16 +125,6 @@ class VegetationDensity(models.Model):
     class Meta:
         verbose_name        = "Végétation"
         verbose_name_plural = "Végétations"
-        constraints         = [
-            models.UniqueConstraint(
-                fields=['zone', 'osm_id'],
-                condition=models.Q(osm_id__isnull=False),
-                name='unique_veg_osm_id_per_zone',
-            )
-        ]
-        indexes = [
-            models.Index(fields=['zone', 'osm_id'], name='veg_zone_osm_idx'),
-        ]
 
     def __str__(self):
         return f"{self.name} — NDVI {self.ndvi_value:.2f}"

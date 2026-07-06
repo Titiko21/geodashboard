@@ -1,6 +1,5 @@
 from django.urls import path
 from . import views
-from .traffic_views import api_traffic_zone, api_traffic_all
 
 app_name = "dashboard"
 
@@ -27,10 +26,6 @@ urlpatterns = [
     path("api/gee/flood/",                      views.api_gee_flood,      name="api_gee_flood"),
     path("api/gee/road/",                       views.api_gee_road,       name="api_gee_road"),
     path("api/gee/landuse/",                    views.api_gee_landuse,    name="api_gee_landuse"),
-
-    # API — Estimation du trafic
-    path("api/traffic/",                        api_traffic_all,          name="api_traffic_all"),
-    path("api/traffic/<str:zone_code>/",        api_traffic_zone,         name="api_traffic_zone"),
 
     # API — Découpage administratif (Phase B)
     path("api/admin/divisions/",                views.api_admin_divisions, name="api_admin_divisions"),

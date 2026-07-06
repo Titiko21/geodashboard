@@ -212,9 +212,8 @@ class RoadSectionAdmin(admin.ModelAdmin):
         }),
         ("État de la section", {
             'description': (
-                "Le score est calculé automatiquement lors de l'import OSM "
-                "(tags : highway, surface, smoothness). "
-                "Modifiez-le manuellement uniquement après inspection terrain."
+                "Modifiez le score manuellement après inspection terrain "
+                "(0 = mauvais, 100 = excellent)."
             ),
             'fields': (
                 ('condition_score', 'status'),
@@ -222,12 +221,8 @@ class RoadSectionAdmin(admin.ModelAdmin):
                 'notes',
             ),
         }),
-        ("Référence OpenStreetMap", {
-            'description': "Identifiant OSM — clé de mise à jour lors des imports automatiques.",
-            'fields': ('osm_id',),
-        }),
         ("Géométrie (tracé)", {
-            'description': "GeoJSON LineString du tracé routier, issu de l'API Overpass. Ne pas modifier manuellement.",
+            'description': "GeoJSON LineString du tracé routier. Ne pas modifier manuellement.",
             'classes': ('collapse',),
             'fields':  ('geojson',),
         }),
@@ -281,10 +276,6 @@ class FloodRiskAdmin(admin.ModelAdmin):
                 ('area_km2', 'rainfall_mm'),
             ),
         }),
-        ("Référence OpenStreetMap", {
-            'description': "Identifiant OSM — clé de mise à jour lors des imports automatiques.",
-            'fields': ('osm_id',),
-        }),
         ("Géométrie (périmètre)", {
             'classes': ('collapse',),
             'fields':  ('geojson',),
@@ -328,10 +319,6 @@ class VegetationDensityAdmin(admin.ModelAdmin):
                 ('ndvi_value', 'density_class'),
                 ('coverage_percent', 'change_vs_previous'),
             ),
-        }),
-        ("Référence OpenStreetMap", {
-            'description': "Identifiant OSM — clé de mise à jour lors des imports automatiques.",
-            'fields': ('osm_id',),
         }),
         ("Géométrie (périmètre)", {
             'classes': ('collapse',),

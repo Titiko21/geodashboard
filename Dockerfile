@@ -23,8 +23,6 @@ COPY . .
 
 RUN python manage.py collectstatic --noinput 2>/dev/null || true
 
-COPY geodash_dump.sql /app/geodash_dump.sql
-
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 

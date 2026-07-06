@@ -34,39 +34,10 @@ done
 echo "[GéoDash] Migrations Django..."
 python manage.py migrate --noinput 2>&1 || true
 
-# ── 3. Import conditionnel (UNE SEULE FOIS) ──
-ZONE_COUNT=$(PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -t -c \
-  "SELECT COUNT(*) FROM dashboard_zone;" 2>/dev/null | tr -d ' ' || echo "0")
-
-if [ "$ZONE_COUNT" = "0" ] || [ -z "$ZONE_COUNT" ]; then
-  if [ -f /app/geodash_dump.sql ]; then
-    echo "========================================"
-    echo "[GéoDash] Base vide — IMPORT EN COURS..."
-    echo "========================================"
-    PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" < /app/geodash_dump.sql 2>&1
-
-    NEW_COUNT=$(PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -t -c \
-      "SELECT COUNT(*) FROM dashboard_zone;" 2>/dev/null | tr -d ' ')
-    echo "[GéoDash] Import terminé — $NEW_COUNT zones en base."
-    echo "========================================"
-  else
-    echo "[GéoDash] ATTENTION : Base vide et pas de dump trouvé."
-  fi
-else
-  echo "[GéoDash] Base déjà peuplée ($ZONE_COUNT zones) — pas d'import."
-fi
-
-# ── 3.4 Fix encodage (idempotent via marqueur SQL) ──
-if [ -f /app/fix_encoding.sql ]; then
-  echo "[GéoDash] Application du fix encodage (idempotent)..."
-  PGCLIENTENCODING=UTF8 PGPASSWORD="$POSTGRES_PASSWORD" \
-    psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" \
-         -v ON_ERROR_STOP=1 -f /app/fix_encoding.sql \
-    && echo "[GéoDash] Fix encodage OK." \
-    || echo "[GéoDash] ATTENTION : le fix encodage a échoué (voir log ci-dessus)."
-else
-  echo "[GéoDash] Pas de fix_encoding.sql trouvé — skip."
-fi
+# ── 3. Bootstrap des communes (idempotent — seule source de données) ──
+echo "[GéoDash] Import communes Grand Abidjan (idempotent)..."
+python manage.py import_communes 2>&1 \
+  || echo "[GéoDash] ATTENTION : import_communes a échoué (voir log ci-dessus)."
 
 # ── 3.5 Création superuser (idempotente) ──
 if [ -n "$DJANGO_SUPERUSER_USERNAME" ] && [ -n "$DJANGO_SUPERUSER_PASSWORD" ]; then

@@ -44,7 +44,7 @@ from dashboard.models import (
     VegetationDensity,
     Zone,
 )
-from dashboard.management.commands.populate_geodata import _geojson_centroid
+from dashboard._geo_utils import geojson_centroid
 
 
 SCORE_RE = re.compile(r"score\s+(\d+)\s*/\s*100")
@@ -76,7 +76,7 @@ def _nearest(candidates, lat, lng):
         return candidates[0]
     best, best_d = None, None
     for obj in candidates:
-        clat, clng = _geojson_centroid(getattr(obj, "geojson", None))
+        clat, clng = geojson_centroid(getattr(obj, "geojson", None))
         if clat is None:
             continue
         d = (clat - lat) ** 2 + (clng - lng) ** 2
@@ -218,7 +218,7 @@ class Command(BaseCommand):
                     totals["relinked"] += 1
 
                 # Repositionnement sur le centroïde réel
-                lat, lng = _geojson_centroid(getattr(obj, "geojson", None))
+                lat, lng = geojson_centroid(getattr(obj, "geojson", None))
                 if lat is not None and (alert.lat != lat or alert.lng != lng):
                     alert.lat, alert.lng = lat, lng
                     changed += ["lat", "lng"]

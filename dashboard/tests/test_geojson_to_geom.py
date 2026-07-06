@@ -1,5 +1,5 @@
 """
-Tests du helper `_geojson_to_geom` dans populate_geodata.
+Tests du helper `geojson_to_geom` (dashboard/_geo_utils.py).
 
 Couvre les cas qui ont fait planter la migration 0006 :
   - Polygon ring < 4 points → None
@@ -9,7 +9,7 @@ Couvre les cas qui ont fait planter la migration 0006 :
 """
 import pytest
 
-from dashboard.management.commands.populate_geodata import _geojson_to_geom
+from dashboard._geo_utils import geojson_to_geom
 
 
 pytestmark = pytest.mark.django_db
@@ -17,7 +17,7 @@ pytestmark = pytest.mark.django_db
 
 class TestLineString:
     def test_valid(self):
-        g = _geojson_to_geom({
+        g = geojson_to_geom({
             "type": "LineString",
             "coordinates": [[-4.0, 5.3], [-4.1, 5.4]],
         })
@@ -26,7 +26,7 @@ class TestLineString:
         assert g.srid == 4326
 
     def test_too_few_points(self):
-        g = _geojson_to_geom({
+        g = geojson_to_geom({
             "type": "LineString",
             "coordinates": [[-4.0, 5.3]],  # 1 point seul
         })
@@ -35,7 +35,7 @@ class TestLineString:
 
 class TestPolygon:
     def test_valid_closed(self):
-        g = _geojson_to_geom({
+        g = geojson_to_geom({
             "type": "Polygon",
             "coordinates": [[
                 [-4.0, 5.3], [-4.1, 5.3], [-4.1, 5.4], [-4.0, 5.4], [-4.0, 5.3]
@@ -47,7 +47,7 @@ class TestPolygon:
 
     def test_unclosed_polygon_is_auto_closed(self):
         """Le helper ferme automatiquement les rings non fermés."""
-        g = _geojson_to_geom({
+        g = geojson_to_geom({
             "type": "Polygon",
             "coordinates": [[
                 [-4.0, 5.3], [-4.1, 5.3], [-4.1, 5.4], [-4.0, 5.4]  # 4 pts mais non fermé
@@ -59,7 +59,7 @@ class TestPolygon:
     def test_ring_too_few_points(self):
         """Bug rencontré dans la migration 0006 : ring < 4 points doit
         retourner None (et pas planter)."""
-        g = _geojson_to_geom({
+        g = geojson_to_geom({
             "type": "Polygon",
             "coordinates": [[[-4.0, 5.3], [-4.1, 5.3], [-4.0, 5.3]]],  # 3 pts seulement
         })
@@ -68,17 +68,17 @@ class TestPolygon:
 
 class TestMalformed:
     def test_empty_dict(self):
-        assert _geojson_to_geom({}) is None
+        assert geojson_to_geom({}) is None
 
     def test_none(self):
-        assert _geojson_to_geom(None) is None
+        assert geojson_to_geom(None) is None
 
     def test_missing_coordinates(self):
-        assert _geojson_to_geom({"type": "LineString"}) is None
+        assert geojson_to_geom({"type": "LineString"}) is None
 
     def test_missing_type(self):
-        assert _geojson_to_geom({"coordinates": [[1, 2], [3, 4]]}) is None
+        assert geojson_to_geom({"coordinates": [[1, 2], [3, 4]]}) is None
 
     def test_non_dict(self):
-        assert _geojson_to_geom("not a dict") is None
-        assert _geojson_to_geom([1, 2, 3]) is None
+        assert geojson_to_geom("not a dict") is None
+        assert geojson_to_geom([1, 2, 3]) is None

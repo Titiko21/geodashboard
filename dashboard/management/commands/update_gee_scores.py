@@ -1,8 +1,8 @@
 """
 update_gee_scores.py — GéoDash (Production)
 
-Remplace les scores simulés (basés sur osm_id % N) par des mesures
-satellite réelles via Google Earth Engine, en sampling per-géométrie.
+Remplace les scores simulés par des mesures satellite réelles via
+Google Earth Engine, en sampling per-géométrie.
 
 Architecture :
   ┌─────────────────┐     ┌──────────────────┐     ┌───────────────────┐

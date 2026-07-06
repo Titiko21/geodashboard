@@ -9,8 +9,8 @@
 #   - DEBUG forcé à True quel que soit le contenu de .env.
 #   - Le mount fichier gee_credentials.json reste prioritaire sur le bind mount
 #     du dossier (mount plus spécifique gagne).
-#   - L'entrypoint.sh original (gunicorn + import dump + fix encoding) est
-#     bypassé : la base est déjà peuplée, pas besoin de rejouer ces étapes.
+#   - L'entrypoint.sh original (gunicorn) est bypassé ; on rejoue le même
+#     bootstrap (migrate + import communes, idempotent) avant runserver.
 
 services:
   web:
@@ -28,5 +28,7 @@ services:
       - |
         echo "[GéoDash dev] Migrations Django..."
         python manage.py migrate --noinput
+        echo "[GéoDash dev] Import communes Grand Abidjan (idempotent)..."
+        python manage.py import_communes || true
         echo "[GéoDash dev] Démarrage runserver sur 0.0.0.0:8000..."
         exec python manage.py runserver 0.0.0.0:8000
