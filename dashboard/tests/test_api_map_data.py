@@ -36,7 +36,9 @@ def test_road_segment_has_required_fields(auth_client, zone):
         geojson={"type": "LineString", "coordinates": [[-4.0, 5.3], [-4.1, 5.4]]},
     )
 
-    resp = auth_client.get("/api/map-data/")
+    # focus=all : réseau complet (par défaut, seuls les axes structurants
+    # `is_strategic=True` sortent — cf. _apply_strategic_filter).
+    resp = auth_client.get("/api/map-data/?focus=all")
     assert resp.status_code == 200
     data = json.loads(resp.content)
     assert len(data["routes"]) == 1
@@ -102,7 +104,7 @@ def test_geom_postgis_takes_priority_over_geojson_field(auth_client, zone):
         geom=LineString((-4.0, 5.3), (-4.1, 5.4), srid=4326),               # vérité
     )
 
-    resp = auth_client.get("/api/map-data/")
+    resp = auth_client.get("/api/map-data/?focus=all")
     assert resp.status_code == 200
     data = json.loads(resp.content)
     geo = data["routes"][0]["geojson"]
@@ -121,8 +123,24 @@ def test_zone_filter(auth_client, zone):
     RoadSegment.objects.create(zone=other, name="B", condition_score=80, status="bon",
                                geojson={"type": "LineString", "coordinates": [[2, 2], [3, 3]]})
 
-    resp = auth_client.get("/api/map-data/?zone=TST")
+    resp = auth_client.get("/api/map-data/?zone=TST&focus=all")
     assert resp.status_code == 200
     data = json.loads(resp.content)
     assert len(data["routes"]) == 1
     assert data["routes"][0]["name"] == "A"
+
+
+def test_default_focus_hides_non_strategic_roads(auth_client, zone):
+    """Sans ?focus=all, seuls les axes structurants (is_strategic) sortent —
+    allègement du rendu carte par défaut."""
+    RoadSegment.objects.create(zone=zone, name="Ruelle", condition_score=50,
+                               status="degrade", is_strategic=False,
+                               geojson={"type": "LineString", "coordinates": [[0, 0], [1, 1]]})
+    RoadSegment.objects.create(zone=zone, name="Autoroute", condition_score=90,
+                               status="bon", is_strategic=True,
+                               geojson={"type": "LineString", "coordinates": [[2, 2], [3, 3]]})
+
+    resp = auth_client.get("/api/map-data/")
+    assert resp.status_code == 200
+    data = json.loads(resp.content)
+    assert [r["name"] for r in data["routes"]] == ["Autoroute"]
