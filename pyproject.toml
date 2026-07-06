@@ -8,7 +8,7 @@
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings_test"
 python_files = ["test_*.py", "*_test.py"]
-testpaths = ["dashboard/tests", "admin_divisions/tests"]
+testpaths = ["dashboard/tests", "admin_divisions/tests", "importer/tests"]
 addopts = [
     "--strict-markers",
     "--strict-config",

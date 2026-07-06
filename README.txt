@@ -46,6 +46,13 @@ geodashboard/
 │   ├── settings.py                      ← Configuration Django (GIS, GEE, Keycloak, logging)
 │   └── urls.py                          ← Routes racine
 │
+├── importer/                            ← Importeur générique multi-format
+│   ├── engine.py                        ← Moteur : OGR → mapping → upsert idempotent
+│   ├── registry.py                      ← Cibles d'import (Phase A : commune)
+│   ├── mappings/                        ← Fichiers de mapping JSON livrés
+│   └── management/commands/
+│       └── import_layer.py              ← CLI : --file --mapping [--dry-run|--list-layers]
+│
 └── dashboard/
     ├── models.py                        ← Zone, RoadSegment, FloodRisk, VegetationDensity, Alert
     ├── views.py                         ← Vue dashboard + API REST
@@ -98,33 +105,27 @@ geodashboard/
   GET  /api/zones/<code>/stats/             → Stats d'une zone
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- INTÉGRER VOS DONNÉES RÉELLES
+ IMPORTER VOS DONNÉES (GeoJSON / Shapefile / GeoPackage)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Créez une commande de synchronisation dans :
-  dashboard/management/commands/sync_from_api.py
+L'importeur générique (app `importer`) charge n'importe quel fichier
+géospatial vers une couche de l'application, sans écrire de code :
 
-Exemple minimal :
+    # 1. Explorer le fichier (couches, colonnes)
+    python manage.py import_layer --file donnees.gpkg --list-layers
 
-    from dashboard.models import RoadSegment, Zone
-    import requests
+    # 2. Écrire un mapping JSON (colonne du fichier → entrée de la cible)
+    #    Exemple : importer/mappings/communes_grand_abidjan.json
+    #    { "target": "commune", "columns": { "name": ["NOMS", "NOM"] } }
 
-    def sync():
-        data = requests.get('https://votre-api.com/routes').json()
-        for item in data:
-            RoadSegment.objects.update_or_create(
-                id=item['id'],
-                defaults={
-                    'name':            item['nom'],
-                    'status':          item['statut'],       # 'bon','degrade','critique','ferme'
-                    'condition_score': item['score'],        # 0-100
-                    'geojson': {                             # GeoJSON LineString
-                        'type': 'LineString',
-                        'coordinates': item['coordonnees']   # [[lng,lat], ...]
-                    },
-                    'zone': Zone.objects.get(code=item['zone_code']),
-                }
-            )
+    # 3. Prévisualiser (aucune écriture)
+    python manage.py import_layer --file f.geojson --mapping m.json --dry-run
+
+    # 4. Importer (idempotent : rejouable sans doublon)
+    python manage.py import_layer --file f.geojson --mapping m.json
+
+Cibles disponibles (importer/registry.py) : commune.
+Les cibles routes (BDR), drainage, terrain s'ajouteront au fil des phases.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  ADMINISTRATION

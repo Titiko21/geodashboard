@@ -1,0 +1,6 @@
+{
+  "target": "commune",
+  "columns": {
+    "name": ["NOMS", "NOM", "name", "NAME"]
+  }
+}
