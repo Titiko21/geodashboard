@@ -162,9 +162,9 @@ function initMap(lat, lng, bounds) {
 
   _bindMapCoords();
   _loadCommunes();
-  // Couches factuelles affichées par défaut : points observés + points chauds.
+  // Par défaut : carte SOBRE — seuls les points observés (discrets).
+  // Les points chauds, courbes, relief… s'activent via les chips.
   _toggleFloodEvents(document.querySelector('[data-toggle-events]'));
-  _toggleFloodHeat(document.querySelector('[data-toggle-heat]'));
   _hideOverlay();
 }
 
@@ -213,10 +213,10 @@ function _zoneStyle(props) {
   var isSel = sel === 'commune:' + props.code;
   return {
     color:       isSel ? '#dc2626' : '#64748b',
-    weight:      isSel ? 3 : 1.2,
-    opacity:     isSel ? 1 : 0.55,
+    weight:      isSel ? 2.2 : 1.1,
+    opacity:     isSel ? 0.85 : 0.5,
     fillColor:   '#64748b',
-    fillOpacity: isSel ? 0.05 : 0.03,
+    fillOpacity: isSel ? 0.04 : 0.02,
   };
 }
 
@@ -615,7 +615,9 @@ function initEventListeners() {
 
 function _loadSettings() {
   try {
-    var raw = localStorage.getItem('gd-settings');
+    // v2 : clé changée pour réappliquer le fond par défaut « Clair »
+    // (Voyager) aux utilisateurs dont l'ancien réglage pointait ailleurs.
+    var raw = localStorage.getItem('gd-settings-v2');
     if (raw) _settings = Object.assign({}, GD_SETTINGS_DEFAULT, JSON.parse(raw));
   } catch (e) { _settings = Object.assign({}, GD_SETTINGS_DEFAULT); }
   var savedTheme = null;
@@ -624,7 +626,7 @@ function _loadSettings() {
 }
 
 function _saveSettings() {
-  try { localStorage.setItem('gd-settings', JSON.stringify(_settings)); } catch (e) {}
+  try { localStorage.setItem('gd-settings-v2', JSON.stringify(_settings)); } catch (e) {}
 }
 
 function openSettings() {
