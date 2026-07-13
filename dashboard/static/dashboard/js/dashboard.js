@@ -147,6 +147,7 @@ function initMap(lat, lng, bounds) {
 
   _bindMapCoords();
   _loadCommunes();
+  _toggleFloodEvents(document.querySelector('[data-toggle-events]'));  // affichés par défaut
   _hideOverlay();
 }
 
@@ -187,16 +188,18 @@ function _currentAdminValue() {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
+/* Communes = simples CONTOURS (pas de remplissage : la carte reste lisible
+   et les points d'inondation ressortent). Un léger fill quasi invisible
+   garde l'intérieur cliquable. */
 function _zoneStyle(props) {
   var sel = _currentAdminValue();
   var isSel = sel === 'commune:' + props.code;
-  var color = FLOOD_COLORS[props.flood_level] || '#2563eb';
   return {
-    color:       isSel ? '#0f172a' : color,
-    weight:      isSel ? 3 : 1.4,
-    opacity:     0.9,
-    fillColor:   color,
-    fillOpacity: (props.flood_level ? 0.28 : 0.06),
+    color:       isSel ? '#dc2626' : '#64748b',
+    weight:      isSel ? 3 : 1.2,
+    opacity:     isSel ? 1 : 0.55,
+    fillColor:   '#64748b',
+    fillOpacity: isSel ? 0.05 : 0.03,
   };
 }
 
@@ -243,6 +246,55 @@ function switchAdmin(value) {
   if (value) url.searchParams.set('admin', value);
   else url.searchParams.delete('admin');
   window.location.assign(url.toString());
+}
+
+
+/* ══════ Zones inondées observées (points) ════════════════ */
+
+let lFloodEvents = null;
+
+function _toggleFloodEvents(chip) {
+  if (!map) return;
+  if (lFloodEvents) {
+    map.removeLayer(lFloodEvents);
+    lFloodEvents = null;
+    if (chip) chip.classList.remove('on');
+    return;
+  }
+  if (chip) chip.classList.add('loading');
+  _fetchJSON('/api/flood/events/')
+    .then(function (data) {
+      if (chip) chip.classList.remove('loading');
+      if (!data || !data.features || !data.features.length) {
+        toast('Aucune zone inondée enregistrée', 'warn');
+        return;
+      }
+      lFloodEvents = L.geoJSON(data, {
+        pointToLayer: function (f, latlng) {
+          return L.circleMarker(latlng, {
+            radius: 6, color: '#fff', weight: 2,
+            fillColor: '#2563eb', fillOpacity: 0.9,
+          });
+        },
+        style: { color: '#1d4ed8', weight: 2, fillColor: '#2563eb', fillOpacity: 0.35 },
+        onEachFeature: function (f, layer) {
+          var p = f.properties || {};
+          var html = '<b>Zone inondée observée</b>'
+            + (p.name ? '<br>' + p.name : '')
+            + (p.date ? '<br>' + p.date : '')
+            + (p.source ? '<br><small>' + p.source + '</small>' : '');
+          layer.bindPopup(html);
+          if (layer.bindTooltip) layer.bindTooltip('Zone inondée', { direction: 'top' });
+        },
+      }).addTo(map);
+      if (chip) chip.classList.add('on');
+    })
+    .catch(function (err) {
+      if (chip) chip.classList.remove('loading');
+      if (err === 'session') return;
+      console.warn('[Zones inondées] échec :', err);
+      toast('Zones inondées indisponibles', 'err');
+    });
 }
 
 
@@ -402,6 +454,11 @@ function initEventListeners() {
     chip.addEventListener('click', function () {
       _toggleGeeOverlay(this.dataset.toggleOverlay, this);
     });
+  });
+
+  // Zones inondées observées (points)
+  document.querySelectorAll('[data-toggle-events]').forEach(function (chip) {
+    chip.addEventListener('click', function () { _toggleFloodEvents(this); });
   });
 
   // Fonds de carte

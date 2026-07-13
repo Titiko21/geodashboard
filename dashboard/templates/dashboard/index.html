@@ -159,6 +159,10 @@
     <div class="main-area">
 
         <div class="map-chips" role="toolbar" aria-label="Couches d'analyse">
+            <button type="button" class="chip" data-toggle-events title="Points d'inondations observées">
+                <span class="chip-dot"></span>
+                <svg aria-hidden="true"><use href="#i-flood"></use></svg> Zones inondées
+            </button>
             <button type="button" class="chip" data-toggle-overlay="ndvi" title="Couverture végétale Sentinel-2 (live)">
                 <span class="chip-dot"></span>
                 <svg aria-hidden="true"><use href="#i-leaf"></use></svg> NDVI · Sentinel-2
@@ -185,11 +189,9 @@
         </div>
 
         <div class="map-legend">
-            <div class="ml-ttl">Susceptibilité inondation</div>
-            <div class="ml-row"><div class="ml-poly" style="background:#22c55e"></div>Faible (&lt; 25)</div>
-            <div class="ml-row"><div class="ml-poly" style="background:#eab308"></div>Modéré (25-49)</div>
-            <div class="ml-row"><div class="ml-poly" style="background:#f97316"></div>Élevé (50-74)</div>
-            <div class="ml-row"><div class="ml-poly" style="background:#dc2626"></div>Critique (≥ 75)</div>
+            <div class="ml-ttl">Légende</div>
+            <div class="ml-row"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#2563eb;border:2px solid #fff;box-shadow:0 0 0 1px #94a3b8"></span>Zone inondée observée</div>
+            <div class="ml-row"><div class="ml-line" style="background:#64748b"></div>Limite de commune</div>
         </div>
 
         <div class="map-coords" id="mapCoords" aria-hidden="true">

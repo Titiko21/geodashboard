@@ -1,7 +1,30 @@
+import json
+
 from django.http import JsonResponse
 
-from flood.models import CommuneFloodSusceptibility
+from flood.models import CommuneFloodSusceptibility, FloodEvent
 from flood.scoring import WEIGHTS
+
+
+def api_flood_events(request):
+    """
+    GET /api/flood/events/
+
+    Zones inondées OBSERVÉES (points/polygones) en GeoJSON — affichées
+    telles quelles sur la carte, sans agrégation ni score.
+    """
+    features = []
+    for e in FloodEvent.objects.all():
+        features.append({
+            "type": "Feature",
+            "geometry": json.loads(e.geom.geojson),
+            "properties": {
+                "name":   e.name,
+                "date":   e.date.isoformat() if e.date else None,
+                "source": e.source,
+            },
+        })
+    return JsonResponse({"type": "FeatureCollection", "features": features})
 
 
 def api_flood_susceptibility(request):
