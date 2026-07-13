@@ -844,7 +844,38 @@ def api_zone_stats(request, zone_code):
 
 # ── API — Google Earth Engine ──────────────────────────────────────────────────
 
-from .gee_integration import get_ndvi_stats, get_flood_extent, get_road_surface_index
+from .gee_integration import (
+    get_contour_tiles,
+    get_flood_extent,
+    get_ndvi_stats,
+    get_road_surface_index,
+)
+
+
+@require_GET
+def api_gee_contours(request):
+    """
+    Tuiles de courbes de niveau (MNT Copernicus GLO-30) pour l'emprise active.
+
+    GET /api/gee/contours/?admin=<level>:<code>   (sinon bbox Côte d'Ivoire)
+        &interval=<m>                              (défaut 5 m, bornes 2-50)
+    """
+    geom_geojson, scope = _resolve_gee_geom(request)
+    try:
+        interval = max(2, min(50, int(request.GET.get("interval", 5))))
+    except (TypeError, ValueError):
+        interval = 5
+
+    try:
+        data = get_contour_tiles(geom_geojson, interval=interval)
+    except Exception as exc:
+        logger.error("[GEE Contours] Erreur inattendue (%s) : %s", scope, exc)
+        return JsonResponse({"error": f"Erreur GEE : {str(exc)}"}, status=500)
+
+    if data is None:
+        return JsonResponse({"no_data": True, "tiles_url": None, "scope": scope})
+    data["scope"] = scope
+    return JsonResponse(data)
 
 
 @require_GET

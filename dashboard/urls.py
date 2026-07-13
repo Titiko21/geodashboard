@@ -26,6 +26,7 @@ urlpatterns = [
     path("api/gee/flood/",                      views.api_gee_flood,      name="api_gee_flood"),
     path("api/gee/road/",                       views.api_gee_road,       name="api_gee_road"),
     path("api/gee/landuse/",                    views.api_gee_landuse,    name="api_gee_landuse"),
+    path("api/gee/contours/",                   views.api_gee_contours,   name="api_gee_contours"),
 
     # API — Découpage administratif (Phase B)
     path("api/admin/divisions/",                views.api_admin_divisions, name="api_admin_divisions"),

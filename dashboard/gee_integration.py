@@ -419,6 +419,57 @@ def get_flood_extent(geom_or_bbox, days_back=14):
     }
 
 
+# ─── Courbes de niveau — Copernicus GLO-30 ───────────────────────────────────
+
+@gee_cached("contours_v1", ttl=60 * 60 * 24 * 7)
+def get_contour_tiles(geom_or_bbox, interval=5):
+    """
+    Tuiles de courbes de niveau dérivées du MNT Copernicus GLO-30.
+
+    Technique « changement de classe » : on classe chaque pixel par tranche
+    d'altitude (floor(alt/intervalle)) et on ne garde que les pixels où la
+    classe change par rapport au voisinage → lignes fines et régulières,
+    y compris en terrain plat (le simple modulo y produirait des nappes).
+
+    Courbes fines tous les `interval` m (brun clair) + courbes maîtresses
+    tous les `interval*5` m (brun foncé, épaissies). Renvoie
+    {"tiles_url", "interval", "major_interval"} ou None.
+    """
+    init_gee()
+    if not _gee_initialized:
+        return None
+    region = _to_ee_geometry(geom_or_bbox)
+    if region is None:
+        return None
+
+    try:
+        dem = (
+            ee.ImageCollection("COPERNICUS/DEM/GLO30")
+            .select("DEM").mosaic()
+            .setDefaultProjection("EPSG:4326", None, 30)
+        )
+
+        def _edges(iv):
+            classed = dem.divide(iv).floor()
+            return classed.subtract(classed.focalMin(1)).gt(0)
+
+        minor = _edges(interval).selfMask().visualize(palette=["#b08968"])
+        major = (
+            _edges(interval * 5).focalMax(1).selfMask()
+            .visualize(palette=["#5c4030"])
+        )
+        combined = ee.ImageCollection([minor, major]).mosaic().clip(region)
+        tiles_url = combined.getMapId()["tile_fetcher"].url_format
+        return {
+            "tiles_url":      tiles_url,
+            "interval":       interval,
+            "major_interval": interval * 5,
+        }
+    except Exception as exc:
+        logger.error("[GEE Contours] échec : %s", exc, exc_info=True)
+        return None
+
+
 # ─── Road Surface Quality — Landsat 8 ────────────────────────────────────────
 
 @gee_cached("road_condition_v2")

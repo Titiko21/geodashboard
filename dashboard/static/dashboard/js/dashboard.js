@@ -13,9 +13,9 @@
 let map = null;
 let _mapReady = false;
 let _tileLayer = null;
-let lGeeNdvi = null;   // overlay tuiles NDVI
-let lGeeFlood = null;  // overlay tuiles SAR
-let lZones = null;     // L.geoJSON des communes cliquables
+let _geeLayers = {};    // overlays tuiles GEE actifs (ndvi/sar/contours)
+let lHillshade = null;  // relief ombré (Esri World Hillshade)
+let lZones = null;      // L.geoJSON des communes cliquables
 
 /* Couleurs de la choroplèthe susceptibilité (alignées flood/scoring.py). */
 const FLOOD_COLORS = {
@@ -354,34 +354,38 @@ function _toggleFloodHeat(chip) {
 }
 
 
-/* ══════ Overlays GEE (NDVI · SAR) ═════════════════════════ */
+/* ══════ Overlays GEE (NDVI · SAR · Courbes de niveau) ═════ */
+
+const GEE_OVERLAY_DEFS = {
+  ndvi:     { url: '/api/gee/ndvi/',     opacity: 0.62, empty: 'NDVI indisponible sur cette emprise' },
+  sar:      { url: '/api/gee/flood/',    opacity: 0.70, empty: 'Pas de détection SAR récente' },
+  contours: { url: '/api/gee/contours/', opacity: 0.80, empty: 'Courbes de niveau indisponibles' },
+};
 
 function _geeQuery() {
   return window.location.search || '';
 }
 
 function _toggleGeeOverlay(name, chip) {
-  var isNdvi = (name === 'ndvi');
-  var current = isNdvi ? lGeeNdvi : lGeeFlood;
+  var def = GEE_OVERLAY_DEFS[name];
+  if (!def || !map) return;
 
-  if (current) {
-    map.removeLayer(current);
-    if (isNdvi) lGeeNdvi = null; else lGeeFlood = null;
+  if (_geeLayers[name]) {
+    map.removeLayer(_geeLayers[name]);
+    delete _geeLayers[name];
     if (chip) chip.classList.remove('on');
     return;
   }
 
   if (chip) chip.classList.add('loading');
-  var url = isNdvi ? '/api/gee/ndvi/' + _geeQuery() : '/api/gee/flood/' + _geeQuery();
-  _fetchJSON(url)
+  _fetchJSON(def.url + _geeQuery())
     .then(function (data) {
       if (chip) chip.classList.remove('loading');
       if (!data || !data.tiles_url) {
-        toast(isNdvi ? 'NDVI indisponible sur cette emprise' : 'Pas de détection SAR récente', 'warn');
+        toast(def.empty, 'warn');
         return;
       }
-      var lyr = L.tileLayer(data.tiles_url, { opacity: isNdvi ? 0.62 : 0.7, maxZoom: 20 }).addTo(map);
-      if (isNdvi) lGeeNdvi = lyr; else lGeeFlood = lyr;
+      _geeLayers[name] = L.tileLayer(data.tiles_url, { opacity: def.opacity, maxZoom: 20 }).addTo(map);
       if (chip) chip.classList.add('on');
     })
     .catch(function (err) {
@@ -390,6 +394,24 @@ function _toggleGeeOverlay(name, chip) {
       console.warn('[GEE ' + name + '] échec :', err);
       toast('Service GEE indisponible', 'err');
     });
+}
+
+
+/* ══════ Relief ombré (hillshade — lisibilité du terrain) ══ */
+
+function _toggleRelief(chip) {
+  if (!map) return;
+  if (lHillshade) {
+    map.removeLayer(lHillshade);
+    lHillshade = null;
+    if (chip) chip.classList.remove('on');
+    return;
+  }
+  lHillshade = L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
+    { opacity: 0.45, maxZoom: 16 }
+  ).addTo(map);
+  if (chip) chip.classList.add('on');
 }
 
 
@@ -518,6 +540,11 @@ function initEventListeners() {
   });
   document.querySelectorAll('[data-toggle-heat]').forEach(function (chip) {
     chip.addEventListener('click', function () { _toggleFloodHeat(this); });
+  });
+
+  // Relief ombré
+  document.querySelectorAll('[data-toggle-relief]').forEach(function (chip) {
+    chip.addEventListener('click', function () { _toggleRelief(this); });
   });
 
   // Fonds de carte
