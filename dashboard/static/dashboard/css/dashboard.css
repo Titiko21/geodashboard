@@ -495,19 +495,27 @@ body.dark .rp-pill{background:rgba(31,138,91,.18)}
   .rail,.left-panel{display:none}
 }
 
-/* ── Étiquettes de communes (nomenclature officielle) ─────────────────── */
-.commune-label{
-  background:transparent;border:none;box-shadow:none;padding:0;
-  font:600 11px/1.2 var(--sans);color:#334155;letter-spacing:.04em;
-  text-transform:uppercase;
-  text-shadow:-1px -1px 0 rgba(255,255,255,.85),1px -1px 0 rgba(255,255,255,.85),
-              -1px 1px 0 rgba(255,255,255,.85),1px 1px 0 rgba(255,255,255,.85);
-  pointer-events:none;
+/* ── Étiquettes de communes (nomenclature officielle) ───────────────────
+   Style cartographique : texte nu avec halo, PAS de cartouche. Les
+   !important neutralisent la règle générique .leaflet-tooltip (pastille
+   sombre, réservée aux infobulles de survol) qui écrasait ce style. */
+.leaflet-tooltip.commune-label{
+  background:transparent!important;border:none!important;box-shadow:none!important;
+  padding:0!important;border-radius:0!important;
+  font-family:var(--sans)!important;font-size:10.5px!important;font-weight:600!important;
+  color:#475569!important;letter-spacing:.09em;text-transform:uppercase;
+  text-shadow:
+    0 0 3px rgba(255,255,255,.95), 0 0 6px rgba(255,255,255,.9),
+    -1px -1px 0 rgba(255,255,255,.9), 1px -1px 0 rgba(255,255,255,.9),
+    -1px 1px 0 rgba(255,255,255,.9), 1px 1px 0 rgba(255,255,255,.9);
+  pointer-events:none;opacity:.92;
 }
-.commune-label::before{display:none}
-body.dark .commune-label{
-  color:#e2e8f0;
-  text-shadow:-1px -1px 0 rgba(15,23,42,.85),1px -1px 0 rgba(15,23,42,.85),
-              -1px 1px 0 rgba(15,23,42,.85),1px 1px 0 rgba(15,23,42,.85);
+.leaflet-tooltip.commune-label::before{display:none!important}
+body.dark .leaflet-tooltip.commune-label{
+  color:#cbd5e1!important;
+  text-shadow:
+    0 0 3px rgba(10,15,30,.95), 0 0 6px rgba(10,15,30,.9),
+    -1px -1px 0 rgba(10,15,30,.9), 1px -1px 0 rgba(10,15,30,.9),
+    -1px 1px 0 rgba(10,15,30,.9), 1px 1px 0 rgba(10,15,30,.9);
 }
 #map.zoom-low .commune-label{display:none}
