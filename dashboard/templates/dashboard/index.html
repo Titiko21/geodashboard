@@ -190,7 +190,7 @@
 
         <div class="map-legend">
             <div class="ml-ttl">Légende</div>
-            <div class="ml-row"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#2563eb;border:2px solid #fff;box-shadow:0 0 0 1px #94a3b8"></span>Zone inondée observée</div>
+            <div class="ml-row"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#e11d48;border:2px solid #fff;box-shadow:0 0 0 1px #94a3b8"></span>Zone inondée observée</div>
             <div class="ml-row"><div class="ml-line" style="background:#64748b"></div>Limite de commune</div>
         </div>
 
@@ -363,9 +363,31 @@
                 </div>
             </div>
             <div class="rp-card">
-                <div class="rp-card-head"><h4>Calculé le</h4></div>
-                <div style="font-size:12px;color:var(--ink-2)">{{ flood_profile.computed_at|date:"d/m/Y H:i" }} —
-                    indice statique multi-critères ; le déclencheur pluie sera intégré en phase suivante.</div>
+                <div class="rp-card-head"><h4>Comment ce score est obtenu</h4></div>
+                <div style="display:flex;flex-direction:column">
+                    <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px dashed var(--line-2);font-size:12px">
+                        <span>Calcul terrain (satellite)</span>
+                        <b>{{ flood_profile.physio_susceptibility|floatformat:1 }}/100</b>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px dashed var(--line-2);font-size:12px">
+                        <span>Inondations observées</span>
+                        <b>{{ flood_profile.history_events }}</b>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;padding:8px 0;font-size:12px">
+                        <span><b>Score retenu</b></span>
+                        <b style="color:var(--orange-1)">{{ flood_profile.susceptibility|floatformat:1 }}/100</b>
+                    </div>
+                </div>
+                {% if flood_profile.susceptibility > flood_profile.physio_susceptibility %}
+                <div style="font-size:11.5px;color:var(--ink-2);margin-top:8px;padding:8px;background:var(--surface-2);border-radius:8px">
+                    Score relevé au-dessus du calcul terrain car
+                    <b>{{ flood_profile.history_events }} inondation{{ flood_profile.history_events|pluralize }} observée{{ flood_profile.history_events|pluralize }}</b>
+                    dans cette commune.
+                </div>
+                {% endif %}
+                <div style="font-size:11px;color:var(--ink-3);margin-top:8px">
+                    Calculé le {{ flood_profile.computed_at|date:"d/m/Y H:i" }}. Le déclencheur pluie sera intégré en phase suivante.
+                </div>
             </div>
             {% else %}
             <div class="rp-card">

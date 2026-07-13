@@ -43,11 +43,13 @@ def api_flood_susceptibility(request):
         "weights": WEIGHTS,
         "communes": [
             {
-                "code":           r.commune.code,
-                "name":           r.commune.name,
-                "susceptibility": r.susceptibility,
-                "level":          r.level,
-                "level_label":    r.get_level_display(),
+                "code":                  r.commune.code,
+                "name":                  r.commune.name,
+                "susceptibility":        r.susceptibility,
+                "physio_susceptibility": r.physio_susceptibility,
+                "history_events":        r.history_events,
+                "level":                 r.level,
+                "level_label":           r.get_level_display(),
                 "factors": {
                     "elevation_mean_m": r.elevation_mean_m,
                     "elevation_min_m":  r.elevation_min_m,

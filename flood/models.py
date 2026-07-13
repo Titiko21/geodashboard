@@ -73,7 +73,14 @@ class CommuneFloodSusceptibility(models.Model):
     score_flat       = models.FloatField(null=True, blank=True)
 
     # ── Indice agrégé ──
-    susceptibility = models.FloatField(verbose_name="Susceptibilité (0-100)")
+    physio_susceptibility = models.FloatField(
+        null=True, blank=True, verbose_name="Susceptibilité physiographique (satellite)",
+        help_text="Score calculé sur le terrain seul, avant plancher observé.",
+    )
+    susceptibility = models.FloatField(
+        verbose_name="Susceptibilité retenue (0-100)",
+        help_text="max(physiographique, plancher imposé par les inondations observées).",
+    )
     level          = models.CharField(max_length=10, choices=LEVEL_CHOICES)
 
     computed_at = models.DateTimeField(default=timezone.now)

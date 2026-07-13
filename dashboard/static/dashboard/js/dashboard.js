@@ -89,7 +89,9 @@ const _TILE_DEFS = {
     attribution: '&copy; OSM &copy; CARTO', maxZoom: 20,
   },
   light: {
-    url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+    // Voyager : plus lisible que Positron (relief doux, labels nets) →
+    // meilleure mise en valeur des couches d'analyse par-dessus.
+    url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
     attribution: '&copy; OSM &copy; CARTO', maxZoom: 20,
   },
   osm: {
@@ -271,12 +273,14 @@ function _toggleFloodEvents(chip) {
       }
       lFloodEvents = L.geoJSON(data, {
         pointToLayer: function (f, latlng) {
+          // Rouge vif + liseré blanc : ressort sur fond clair, satellite,
+          // ET par-dessus la lagune (où le bleu se noyait).
           return L.circleMarker(latlng, {
-            radius: 6, color: '#fff', weight: 2,
-            fillColor: '#2563eb', fillOpacity: 0.9,
+            radius: 7, color: '#ffffff', weight: 2.5,
+            fillColor: '#e11d48', fillOpacity: 0.95,
           });
         },
-        style: { color: '#1d4ed8', weight: 2, fillColor: '#2563eb', fillOpacity: 0.35 },
+        style: { color: '#be123c', weight: 2, fillColor: '#e11d48', fillOpacity: 0.4 },
         onEachFeature: function (f, layer) {
           var p = f.properties || {};
           var html = '<b>Zone inondée observée</b>'
