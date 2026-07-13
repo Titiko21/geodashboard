@@ -24,6 +24,7 @@
 
 <link rel="stylesheet" href="{% static 'dashboard/css/leaflet.min.css' %}">
 <script src="{% static 'dashboard/js/leaflet.min.js' %}" defer></script>
+<script src="{% static 'dashboard/js/leaflet-heat.js' %}" defer></script>
 <link rel="stylesheet" href="{% static 'dashboard/css/dashboard.css' %}">
 </head>
 <body class="{% if request.COOKIES.gd_theme == 'dark' %}dark{% endif %}">
@@ -159,6 +160,10 @@
     <div class="main-area">
 
         <div class="map-chips" role="toolbar" aria-label="Couches d'analyse">
+            <button type="button" class="chip" data-toggle-heat title="Concentration des inondations observées (carte de chaleur)">
+                <span class="chip-dot"></span>
+                <svg aria-hidden="true"><use href="#i-flood"></use></svg> Points chauds
+            </button>
             <button type="button" class="chip" data-toggle-events title="Points d'inondations observées">
                 <span class="chip-dot"></span>
                 <svg aria-hidden="true"><use href="#i-flood"></use></svg> Zones inondées
@@ -190,6 +195,7 @@
 
         <div class="map-legend">
             <div class="ml-ttl">Légende</div>
+            <div class="ml-row"><div class="ml-line" style="background:linear-gradient(90deg,#3b82f6,#22c55e,#eab308,#ef4444);height:8px;border-radius:4px"></div>Concentration d'inondations</div>
             <div class="ml-row"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#e11d48;border:2px solid #fff;box-shadow:0 0 0 1px #94a3b8"></span>Zone inondée observée</div>
             <div class="ml-row"><div class="ml-line" style="background:#64748b"></div>Limite de commune</div>
         </div>

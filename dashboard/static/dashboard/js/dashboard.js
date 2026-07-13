@@ -149,7 +149,9 @@ function initMap(lat, lng, bounds) {
 
   _bindMapCoords();
   _loadCommunes();
-  _toggleFloodEvents(document.querySelector('[data-toggle-events]'));  // affichés par défaut
+  // Couches factuelles affichées par défaut : points observés + points chauds.
+  _toggleFloodEvents(document.querySelector('[data-toggle-events]'));
+  _toggleFloodHeat(document.querySelector('[data-toggle-heat]'));
   _hideOverlay();
 }
 
@@ -251,9 +253,21 @@ function switchAdmin(value) {
 }
 
 
-/* ══════ Zones inondées observées (points) ════════════════ */
+/* ══════ Zones inondées observées (points + points chauds) ═ */
 
-let lFloodEvents = null;
+let lFloodEvents = null;   // couche points cliquables
+let lFloodHeat = null;     // couche carte de chaleur (concentration)
+let _eventsPromise = null; // cache : un seul fetch pour les deux couches
+
+function _fetchEvents() {
+  if (!_eventsPromise) {
+    _eventsPromise = _fetchJSON('/api/flood/events/').catch(function (err) {
+      _eventsPromise = null;   // réessayable au prochain clic
+      throw err;
+    });
+  }
+  return _eventsPromise;
+}
 
 function _toggleFloodEvents(chip) {
   if (!map) return;
@@ -264,7 +278,7 @@ function _toggleFloodEvents(chip) {
     return;
   }
   if (chip) chip.classList.add('loading');
-  _fetchJSON('/api/flood/events/')
+  _fetchEvents()
     .then(function (data) {
       if (chip) chip.classList.remove('loading');
       if (!data || !data.features || !data.features.length) {
@@ -298,6 +312,44 @@ function _toggleFloodEvents(chip) {
       if (err === 'session') return;
       console.warn('[Zones inondées] échec :', err);
       toast('Zones inondées indisponibles', 'err');
+    });
+}
+
+/* Carte de chaleur : la CONCENTRATION des inondations observées.
+   Lecture "points chauds" type ArcGIS Pro — 100 % factuelle (aucun
+   score) : plus les relevés se recouvrent, plus le halo chauffe. */
+function _toggleFloodHeat(chip) {
+  if (!map || typeof L.heatLayer !== 'function') return;
+  if (lFloodHeat) {
+    map.removeLayer(lFloodHeat);
+    lFloodHeat = null;
+    if (chip) chip.classList.remove('on');
+    return;
+  }
+  if (chip) chip.classList.add('loading');
+  _fetchEvents()
+    .then(function (data) {
+      if (chip) chip.classList.remove('loading');
+      if (!data || !data.features || !data.features.length) {
+        toast('Aucune zone inondée enregistrée', 'warn');
+        return;
+      }
+      var pts = [];
+      data.features.forEach(function (f) {
+        var g = f.geometry || {};
+        if (g.type === 'Point') pts.push([g.coordinates[1], g.coordinates[0], 1.0]);
+      });
+      lFloodHeat = L.heatLayer(pts, {
+        radius: 42, blur: 30, maxZoom: 14, minOpacity: 0.35,
+        gradient: { 0.25: '#3b82f6', 0.5: '#22c55e', 0.75: '#eab308', 1.0: '#ef4444' },
+      }).addTo(map);
+      if (chip) chip.classList.add('on');
+    })
+    .catch(function (err) {
+      if (chip) chip.classList.remove('loading');
+      if (err === 'session') return;
+      console.warn('[Points chauds] échec :', err);
+      toast('Points chauds indisponibles', 'err');
     });
 }
 
@@ -460,9 +512,12 @@ function initEventListeners() {
     });
   });
 
-  // Zones inondées observées (points)
+  // Zones inondées observées (points) + points chauds (concentration)
   document.querySelectorAll('[data-toggle-events]').forEach(function (chip) {
     chip.addEventListener('click', function () { _toggleFloodEvents(this); });
+  });
+  document.querySelectorAll('[data-toggle-heat]').forEach(function (chip) {
+    chip.addEventListener('click', function () { _toggleFloodHeat(this); });
   });
 
   // Fonds de carte
