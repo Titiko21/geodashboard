@@ -115,11 +115,21 @@ function _buildTileLayer(style) {
   });
 }
 
+let _labelsLayer = null;   // toponymie par-dessus le fond Satellite (sans noms)
+
 function _applyTileStyle(style) {
   if (!map) return;
   if (_tileLayer) map.removeLayer(_tileLayer);
+  if (_labelsLayer) { map.removeLayer(_labelsLayer); _labelsLayer = null; }
   _tileLayer = _buildTileLayer(style).addTo(map);
   _tileLayer.bringToBack();
+  if (style === 'satellite') {
+    // Étiquettes claires avec halo, conçues pour fonds sombres/imagerie.
+    _labelsLayer = L.tileLayer(
+      'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',
+      { maxZoom: 19, opacity: 0.95 }
+    ).addTo(map);
+  }
   document.querySelectorAll('[data-basemap]').forEach(function (b) {
     b.classList.toggle('active', b.dataset.basemap === style);
   });
@@ -225,7 +235,13 @@ function _loadCommunes() {
         style: function (f) { return _zoneStyle(f.properties); },
         onEachFeature: function (feature, layer) {
           var p = feature.properties;
-          layer.bindTooltip(_zoneTooltip(p), { sticky: true });
+          // Étiquette permanente : nomenclature officielle (base admin),
+          // accents corrects (Port-Bouët, Attécoubé…). Masquée aux petits
+          // zooms via la classe .zoom-low sur #map (cf. _bindLabelZoom).
+          layer.bindTooltip(p.name, {
+            permanent: true, direction: 'center',
+            className: 'commune-label', interactive: false,
+          });
           layer.on('mouseover', function () { layer.setStyle({ weight: 3, fillOpacity: 0.42 }); });
           layer.on('mouseout', function () { layer.setStyle(_zoneStyle(p)); });
           layer.on('click', function (e) {
@@ -235,12 +251,27 @@ function _loadCommunes() {
         },
       }).addTo(map);
       lZones.bringToBack();
+      _bindLabelZoom();
     })
     .catch(function (err) {
       if (err === 'session') return;
       console.warn('[Communes] échec :', err);
       toast('Communes indisponibles', 'err');
     });
+}
+
+/* Masque les étiquettes de communes quand on dézoome (vue pays :
+   elles se chevaucheraient) — simple bascule de classe CSS. */
+let _labelZoomBound = false;
+function _bindLabelZoom() {
+  if (!map || _labelZoomBound) return;
+  _labelZoomBound = true;
+  var el = document.getElementById('map');
+  var apply = function () {
+    if (el) el.classList.toggle('zoom-low', map.getZoom() < 10);
+  };
+  map.on('zoomend', apply);
+  apply();
 }
 
 /* Navigation serveur : le backend rend les panneaux (KPIs, inondation,

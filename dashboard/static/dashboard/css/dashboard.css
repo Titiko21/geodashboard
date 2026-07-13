@@ -494,3 +494,20 @@ body.dark .rp-pill{background:rgba(31,138,91,.18)}
        grid-template-areas:"top" "main"}
   .rail,.left-panel{display:none}
 }
+
+/* ── Étiquettes de communes (nomenclature officielle) ─────────────────── */
+.commune-label{
+  background:transparent;border:none;box-shadow:none;padding:0;
+  font:600 11px/1.2 var(--sans);color:#334155;letter-spacing:.04em;
+  text-transform:uppercase;
+  text-shadow:-1px -1px 0 rgba(255,255,255,.85),1px -1px 0 rgba(255,255,255,.85),
+              -1px 1px 0 rgba(255,255,255,.85),1px 1px 0 rgba(255,255,255,.85);
+  pointer-events:none;
+}
+.commune-label::before{display:none}
+body.dark .commune-label{
+  color:#e2e8f0;
+  text-shadow:-1px -1px 0 rgba(15,23,42,.85),1px -1px 0 rgba(15,23,42,.85),
+              -1px 1px 0 rgba(15,23,42,.85),1px 1px 0 rgba(15,23,42,.85);
+}
+#map.zoom-low .commune-label{display:none}
