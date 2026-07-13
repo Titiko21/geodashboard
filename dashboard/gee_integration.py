@@ -419,6 +419,44 @@ def get_flood_extent(geom_or_bbox, days_back=14):
     }
 
 
+# ─── Sonde altimétrique ponctuelle ───────────────────────────────────────────
+
+@gee_cached("pt_elev_v1", ttl=60 * 60 * 24 * 30)
+def get_point_elevation(lat, lng):
+    """
+    Altitude (Copernicus GLO-30) et hauteur au-dessus du drainage (HAND,
+    MERIT Hydro) en un point. Coordonnées arrondies en amont pour le cache.
+
+    Renvoie {"elevation_m", "hand_m"} (valeurs None si hors couverture),
+    ou None si GEE indisponible.
+    """
+    init_gee()
+    if not _gee_initialized:
+        return None
+    try:
+        pt = ee.Geometry.Point([lng, lat])
+        dem = (
+            ee.ImageCollection("COPERNICUS/DEM/GLO30")
+            .select("DEM").mosaic()
+            .setDefaultProjection("EPSG:4326", None, 30)
+        )
+        hand = ee.Image("MERIT/Hydro/v1_0_1").select("hnd")
+
+        elev_f = dem.sample(pt, 30).first()
+        hand_f = hand.sample(pt, 90).first()
+        elev = ee.Algorithms.If(elev_f, ee.Feature(elev_f).get("DEM"), None)
+        hnd = ee.Algorithms.If(hand_f, ee.Feature(hand_f).get("hnd"), None)
+        values = ee.List([elev, hnd]).getInfo()
+
+        return {
+            "elevation_m": round(values[0], 1) if values[0] is not None else None,
+            "hand_m":      round(values[1], 2) if values[1] is not None else None,
+        }
+    except Exception as exc:
+        logger.error("[GEE Élévation] échec (%s, %s) : %s", lat, lng, exc)
+        return None
+
+
 # ─── Courbes de niveau — Copernicus GLO-30 ───────────────────────────────────
 
 @gee_cached("contours_v1", ttl=60 * 60 * 24 * 7)

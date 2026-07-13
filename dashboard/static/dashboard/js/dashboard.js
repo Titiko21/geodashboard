@@ -114,6 +114,7 @@ function _buildTileLayer(style) {
   var def = _TILE_DEFS[style] || _TILE_DEFS.light;
   return L.tileLayer(def.url, {
     attribution: def.attribution, maxZoom: def.maxZoom, detectRetina: true,
+    className: 'gd-basemap',   // léger assourdissement (cf. CSS)
   });
 }
 
@@ -164,7 +165,40 @@ function initMap(lat, lng, bounds) {
   // Par défaut : carte SOBRE — seuls les points observés (discrets).
   // Les points chauds, courbes, relief… s'activent via les chips.
   _toggleFloodEvents(document.querySelector('[data-toggle-events]'));
+  // Sonde altimétrique : clic droit n'importe où → altitude + drainage.
+  map.on('contextmenu', _probeElevation);
   _hideOverlay();
+}
+
+/* Clic droit sur la carte → interroge le MNT au point exact :
+   altitude (mer = 0) et hauteur au-dessus du drainage le plus proche.
+   C'est l'information altimétrique EXPLOITABLE (pas juste des lignes). */
+function _probeElevation(e) {
+  var ll = e.latlng;
+  var popup = L.popup({ maxWidth: 260 })
+    .setLatLng(ll)
+    .setContent('<b>Sonde altimétrique</b><br>Interrogation du MNT…')
+    .openOn(map);
+
+  _fetchJSON('/api/gee/elevation/?lat=' + ll.lat.toFixed(5) + '&lng=' + ll.lng.toFixed(5))
+    .then(function (d) {
+      if (!d || d.no_data || d.elevation_m == null) {
+        popup.setContent('<b>Sonde altimétrique</b><br>Donnée indisponible ici.');
+        return;
+      }
+      var html = '<b>Sonde altimétrique</b>'
+        + '<br>Altitude : <b>' + d.elevation_m.toFixed(0) + ' m</b> (niveau mer)'
+        + (d.hand_m != null
+            ? '<br>Au-dessus du drainage : <b>' + d.hand_m.toFixed(1) + ' m</b>'
+              + (d.hand_m < 5 ? ' <span style="color:#dc2626;font-weight:700">— zone basse</span>' : '')
+            : '')
+        + '<br><small style="color:#64748b">' + ll.lat.toFixed(5) + ', ' + ll.lng.toFixed(5) + '</small>';
+      popup.setContent(html);
+    })
+    .catch(function (err) {
+      if (err === 'session') return;
+      popup.setContent('<b>Sonde altimétrique</b><br>Service indisponible.');
+    });
 }
 
 function _hideOverlay() {

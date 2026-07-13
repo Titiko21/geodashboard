@@ -220,8 +220,11 @@ body.dark .theme-toggle .th-moon, html[data-theme="dark"] .theme-toggle .th-moon
 
 .map-chips{
   position:absolute;top:14px;left:14px;z-index:400;
-  display:flex;flex-wrap:wrap;gap:6px;max-width:60%;
+  display:flex;flex-direction:column;align-items:flex-start;gap:6px;
 }
+/* Fond de carte assourdi : les couches d'analyse ressortent, sans
+   dénaturer la toponymie du fond. */
+.gd-basemap{filter:saturate(.8) contrast(.97) brightness(1.04)}
 .chip{
   display:inline-flex;align-items:center;gap:7px;
   background:rgba(255,255,255,.92);backdrop-filter:blur(8px);

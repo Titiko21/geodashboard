@@ -848,8 +848,31 @@ from .gee_integration import (
     get_contour_tiles,
     get_flood_extent,
     get_ndvi_stats,
+    get_point_elevation,
     get_road_surface_index,
 )
+
+
+@require_GET
+def api_gee_elevation(request):
+    """
+    Sonde altimétrique : altitude + HAND au point cliqué.
+
+    GET /api/gee/elevation/?lat=<...>&lng=<...>
+    """
+    try:
+        lat = round(float(request.GET.get("lat")), 4)   # ~11 m — clé de cache
+        lng = round(float(request.GET.get("lng")), 4)
+    except (TypeError, ValueError):
+        return JsonResponse({"error": "lat et lng (décimaux) requis"}, status=400)
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        return JsonResponse({"error": "coordonnées hors bornes"}, status=400)
+
+    data = get_point_elevation(lat, lng)
+    if data is None:
+        return JsonResponse({"no_data": True}, status=200)
+    data.update({"lat": lat, "lng": lng})
+    return JsonResponse(data)
 
 
 @require_GET
