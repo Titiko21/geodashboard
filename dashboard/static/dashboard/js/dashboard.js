@@ -95,8 +95,11 @@ const _TILE_DEFS = {
     attribution: '&copy; OSM &copy; CARTO', maxZoom: 20,
   },
   osm: {
-    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attribution: '&copy; OpenStreetMap', maxZoom: 19,
+    // Style Humanitaire (rendu OSM France) : la nomenclature complète
+    // d'OpenStreetMap mais en palette claire — bien plus lisible que le
+    // rendu standard pour superposer des couches d'analyse.
+    url: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
+    attribution: '&copy; OpenStreetMap &middot; HOT &middot; OSM France', maxZoom: 19,
   },
   topo: {
     url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
