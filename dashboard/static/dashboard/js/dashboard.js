@@ -28,7 +28,7 @@ const FLOOD_COLORS = {
 const GD_SETTINGS_DEFAULT = {
   theme: 'light',
   density: 'normal',
-  tile: 'light',
+  tile: 'osm',   // fond par défaut : OpenStreetMap standard (choix utilisateur)
   zoom: 11,
   showScale: true,
   showLegend: true,
@@ -95,11 +95,10 @@ const _TILE_DEFS = {
     attribution: '&copy; OSM &copy; CARTO', maxZoom: 20,
   },
   osm: {
-    // Style Humanitaire (rendu OSM France) : la nomenclature complète
-    // d'OpenStreetMap mais en palette claire — bien plus lisible que le
-    // rendu standard pour superposer des couches d'analyse.
-    url: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
-    attribution: '&copy; OpenStreetMap &middot; HOT &middot; OSM France', maxZoom: 19,
+    // OpenStreetMap standard — nomenclature complète, rendu de référence.
+    // detectRetina (option globale) rend le texte net sur écrans HiDPI.
+    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '&copy; OpenStreetMap', maxZoom: 19,
   },
   topo: {
     url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
@@ -617,7 +616,7 @@ function _loadSettings() {
   try {
     // v2 : clé changée pour réappliquer le fond par défaut « Clair »
     // (Voyager) aux utilisateurs dont l'ancien réglage pointait ailleurs.
-    var raw = localStorage.getItem('gd-settings-v2');
+    var raw = localStorage.getItem('gd-settings-v3');
     if (raw) _settings = Object.assign({}, GD_SETTINGS_DEFAULT, JSON.parse(raw));
   } catch (e) { _settings = Object.assign({}, GD_SETTINGS_DEFAULT); }
   var savedTheme = null;
@@ -626,7 +625,7 @@ function _loadSettings() {
 }
 
 function _saveSettings() {
-  try { localStorage.setItem('gd-settings-v2', JSON.stringify(_settings)); } catch (e) {}
+  try { localStorage.setItem('gd-settings-v3', JSON.stringify(_settings)); } catch (e) {}
 }
 
 function openSettings() {
