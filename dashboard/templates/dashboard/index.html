@@ -159,33 +159,8 @@
     <!-- ═══════ MAIN AREA — Carte ════════════════════════════ -->
     <div class="main-area">
 
-        <div class="map-chips" role="toolbar" aria-label="Couches d'analyse">
-            <button type="button" class="chip" data-toggle-heat title="Concentration des inondations observées (carte de chaleur)">
-                <span class="chip-dot"></span>
-                <svg aria-hidden="true"><use href="#i-flood"></use></svg> Points chauds
-            </button>
-            <button type="button" class="chip" data-toggle-events title="Points d'inondations observées">
-                <span class="chip-dot"></span>
-                <svg aria-hidden="true"><use href="#i-flood"></use></svg> Zones inondées
-            </button>
-            <button type="button" class="chip" data-toggle-overlay="ndvi" title="Couverture végétale Sentinel-2 (live)">
-                <span class="chip-dot"></span>
-                <svg aria-hidden="true"><use href="#i-leaf"></use></svg> NDVI · Sentinel-2
-            </button>
-            <button type="button" class="chip" data-toggle-overlay="sar" title="Détection d'eau Sentinel-1 SAR (live)">
-                <span class="chip-dot"></span>
-                <svg aria-hidden="true"><use href="#i-flood"></use></svg> SAR · Inondation
-            </button>
-            <button type="button" class="chip" data-toggle-overlay="contours" title="Courbes de niveau (5 m, maîtresses 25 m) dérivées du MNT">
-                <span class="chip-dot"></span>
-                <svg aria-hidden="true"><use href="#i-layers"></use></svg> Courbes de niveau
-            </button>
-            <button type="button" class="chip" data-toggle-relief title="Relief ombré — lisibilité du terrain (dépressions, crêtes)">
-                <span class="chip-dot"></span>
-                <svg aria-hidden="true"><use href="#i-map"></use></svg> Relief
-            </button>
-        </div>
-
+        <!-- Les couches d'analyse se gèrent dans Paramètres → Couches.
+             La carte reste nue ; la légende (dynamique) reflète l'affiché. -->
         <div class="map-tools">
             <div class="tool-group" role="tablist" aria-label="Fond de carte">
                 <button type="button" class="tool" data-basemap="dark">Sombre</button>
@@ -202,11 +177,18 @@
             </button>
         </div>
 
-        <div class="map-legend">
+        <!-- Légende DYNAMIQUE : chaque ligne n'apparaît que si sa couche
+             est affichée (Paramètres → Couches). -->
+        <div class="map-legend" id="mapLegend">
             <div class="ml-ttl">Légende</div>
-            <div class="ml-row"><div class="ml-line" style="background:linear-gradient(90deg,#3b82f6,#22c55e,#eab308,#ef4444);height:8px;border-radius:4px"></div>Concentration d'inondations</div>
-            <div class="ml-row"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#e11d48;border:2px solid #fff;box-shadow:0 0 0 1px #94a3b8"></span>Zone inondée observée</div>
+            <div class="ml-row" data-legend="events"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#e11d48;border:2px solid #fff;box-shadow:0 0 0 1px #94a3b8"></span>Inondation observée (relevé terrain)</div>
+            <div class="ml-row" data-legend="heat" style="display:none"><div class="ml-line" style="background:linear-gradient(90deg,#3b82f6,#22c55e,#eab308,#ef4444);height:8px;border-radius:4px"></div>Concentration d'inondations (faible → forte)</div>
+            <div class="ml-row" data-legend="ndvi" style="display:none"><div class="ml-line" style="background:linear-gradient(90deg,#d73027,#fee08b,#1a9850);height:8px;border-radius:4px"></div>Végétation (rare → dense)</div>
+            <div class="ml-row" data-legend="sar" style="display:none"><div class="ml-poly" style="background:#3b82f6"></div>Eau détectée par radar (15 derniers jours)</div>
+            <div class="ml-row" data-legend="contours" style="display:none"><div class="ml-line" style="background:#8b6b4a"></div>Courbe de niveau (5 m · maîtresse 25 m)</div>
+            <div class="ml-row" data-legend="relief" style="display:none"><div class="ml-poly" style="background:linear-gradient(135deg,#e2e8f0,#64748b)"></div>Relief ombré (creux et crêtes)</div>
             <div class="ml-row"><div class="ml-line" style="background:#64748b"></div>Limite de commune</div>
+            <div class="ml-row" style="color:var(--ink-3)"><span style="font-size:13px">🖱</span>Clic droit : altitude du point</div>
         </div>
 
         <div class="map-coords" id="mapCoords" aria-hidden="true">
@@ -454,6 +436,7 @@
 
     <div class="sd-tabs" role="tablist">
         <button type="button" class="sd-tab active" role="tab" data-panel="sd-affichage">Affichage</button>
+        <button type="button" class="sd-tab" role="tab" data-panel="sd-couches">Couches</button>
         <button type="button" class="sd-tab" role="tab" data-panel="sd-carte">Carte</button>
     </div>
 
@@ -477,6 +460,65 @@
                         <button type="button" class="sd-radio-btn" data-val="compact">Compact</button>
                         <button type="button" class="sd-radio-btn active" data-val="normal">Normal</button>
                         <button type="button" class="sd-radio-btn" data-val="comfortable">Large</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="sd-panel" id="sd-couches" role="tabpanel">
+            <div class="sd-section">
+                <div class="sd-section-title">Inondations</div>
+                <div class="sd-row">
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Inondations observées</div>
+                        <div class="sd-row-lbl-hint">Relevés terrain géolocalisés (points rouges cliquables)</div>
+                    </div>
+                    <label class="sd-toggle"><input type="checkbox" id="layer-events"><span class="sd-toggle-track"></span></label>
+                </div>
+                <div class="sd-row">
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Concentration d'inondations</div>
+                        <div class="sd-row-lbl-hint">Halos colorés là où les relevés se concentrent</div>
+                    </div>
+                    <label class="sd-toggle"><input type="checkbox" id="layer-heat"><span class="sd-toggle-track"></span></label>
+                </div>
+            </div>
+            <div class="sd-section sd-mt">
+                <div class="sd-section-title">Analyse satellite (en direct)</div>
+                <div class="sd-row">
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Végétation</div>
+                        <div class="sd-row-lbl-hint">Densité du couvert végétal actuel (indice NDVI)</div>
+                    </div>
+                    <label class="sd-toggle"><input type="checkbox" id="layer-ndvi"><span class="sd-toggle-track"></span></label>
+                </div>
+                <div class="sd-row">
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Eau détectée par radar</div>
+                        <div class="sd-row-lbl-hint">Surfaces en eau des 15 derniers jours (radar, voit à travers les nuages)</div>
+                    </div>
+                    <label class="sd-toggle"><input type="checkbox" id="layer-sar"><span class="sd-toggle-track"></span></label>
+                </div>
+            </div>
+            <div class="sd-section sd-mt">
+                <div class="sd-section-title">Terrain</div>
+                <div class="sd-row">
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Courbes de niveau</div>
+                        <div class="sd-row-lbl-hint">Altitude : courbes fines tous les 5 m, maîtresses tous les 25 m</div>
+                    </div>
+                    <label class="sd-toggle"><input type="checkbox" id="layer-contours"><span class="sd-toggle-track"></span></label>
+                </div>
+                <div class="sd-row">
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Relief ombré</div>
+                        <div class="sd-row-lbl-hint">Met en évidence les creux (accumulation d'eau) et les crêtes</div>
+                    </div>
+                    <label class="sd-toggle"><input type="checkbox" id="layer-relief"><span class="sd-toggle-track"></span></label>
+                </div>
+                <div class="sd-row">
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-hint">💡 Astuce : clic droit sur la carte = altitude exacte du point (sonde altimétrique). Les couches actives apparaissent dans la légende de la carte.</div>
                     </div>
                 </div>
             </div>

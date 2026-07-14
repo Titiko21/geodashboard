@@ -32,6 +32,9 @@ const GD_SETTINGS_DEFAULT = {
   zoom: 11,
   showScale: true,
   showLegend: true,
+  // Couches d'analyse (Paramètres → Couches). Par défaut : seuls les
+  // relevés observés — la carte reste sobre.
+  layers: { events: true, heat: false, ndvi: false, sar: false, contours: false, relief: false },
 };
 let _settings = Object.assign({}, GD_SETTINGS_DEFAULT);
 
@@ -162,12 +165,51 @@ function initMap(lat, lng, bounds) {
 
   _bindMapCoords();
   _loadCommunes();
-  // Par défaut : carte SOBRE — seuls les points observés (discrets).
-  // Les points chauds, courbes, relief… s'activent via les chips.
-  _toggleFloodEvents(document.querySelector('[data-toggle-events]'));
+  // Applique les couches choisies (Paramètres → Couches, persistées).
+  Object.keys(LAYER_TOGGLES).forEach(function (name) {
+    if (_settings.layers && _settings.layers[name]) LAYER_TOGGLES[name]();
+  });
+  _updateLegend();
   // Sonde altimétrique : clic droit n'importe où → altitude + drainage.
   map.on('contextmenu', _probeElevation);
   _hideOverlay();
+}
+
+/* Bascule effective de chaque couche (les fonctions _toggle* inversent
+   l'état courant ; l'état désiré vit dans _settings.layers). */
+const LAYER_TOGGLES = {
+  events:   function () { _toggleFloodEvents(null); },
+  heat:     function () { _toggleFloodHeat(null); },
+  ndvi:     function () { _toggleGeeOverlay('ndvi', null); },
+  sar:      function () { _toggleGeeOverlay('sar', null); },
+  contours: function () { _toggleGeeOverlay('contours', null); },
+  relief:   function () { _toggleRelief(null); },
+};
+
+/* État effectif d'une couche sur la carte. */
+function _layerActive(name) {
+  if (name === 'events') return !!lFloodEvents;
+  if (name === 'heat') return !!lFloodHeat;
+  if (name === 'relief') return !!lHillshade;
+  return !!_geeLayers[name];
+}
+
+/* Aligne les couches réelles sur _settings.layers (après Réinitialiser). */
+function _syncLayers() {
+  Object.keys(LAYER_TOGGLES).forEach(function (name) {
+    if (_layerActive(name) !== !!(_settings.layers && _settings.layers[name])) {
+      LAYER_TOGGLES[name]();
+    }
+  });
+  _updateLegend();
+}
+
+/* Légende dynamique : n'affiche que les lignes des couches actives. */
+function _updateLegend() {
+  var lyr = _settings.layers || {};
+  document.querySelectorAll('#mapLegend [data-legend]').forEach(function (row) {
+    row.style.display = lyr[row.dataset.legend] ? '' : 'none';
+  });
 }
 
 /* Clic droit sur la carte → interroge le MNT au point exact :
@@ -594,25 +636,8 @@ function initEventListeners() {
   var themeBtn = document.getElementById('themeToggle');
   if (themeBtn) themeBtn.addEventListener('click', toggleTheme);
 
-  // Overlays GEE
-  document.querySelectorAll('[data-toggle-overlay]').forEach(function (chip) {
-    chip.addEventListener('click', function () {
-      _toggleGeeOverlay(this.dataset.toggleOverlay, this);
-    });
-  });
-
-  // Zones inondées observées (points) + points chauds (concentration)
-  document.querySelectorAll('[data-toggle-events]').forEach(function (chip) {
-    chip.addEventListener('click', function () { _toggleFloodEvents(this); });
-  });
-  document.querySelectorAll('[data-toggle-heat]').forEach(function (chip) {
-    chip.addEventListener('click', function () { _toggleFloodHeat(this); });
-  });
-
-  // Relief ombré
-  document.querySelectorAll('[data-toggle-relief]').forEach(function (chip) {
-    chip.addEventListener('click', function () { _toggleRelief(this); });
-  });
+  // (Les couches d'analyse se gèrent dans Paramètres → Couches,
+  //  cf. initSettings — plus de chips sur la carte.)
 
   // Fonds de carte
   document.querySelectorAll('[data-basemap]').forEach(function (btn) {
@@ -653,6 +678,8 @@ function _loadSettings() {
     var raw = localStorage.getItem('gd-settings-v3');
     if (raw) _settings = Object.assign({}, GD_SETTINGS_DEFAULT, JSON.parse(raw));
   } catch (e) { _settings = Object.assign({}, GD_SETTINGS_DEFAULT); }
+  // Fusion fine des couches : les clés absentes reprennent leur défaut.
+  _settings.layers = Object.assign({}, GD_SETTINGS_DEFAULT.layers, _settings.layers || {});
   var savedTheme = null;
   try { savedTheme = localStorage.getItem('gd-theme'); } catch (e) {}
   if (savedTheme) _settings.theme = savedTheme;
@@ -691,6 +718,11 @@ function _populateSettingsUI() {
   if (sc) sc.checked = !!_settings.showScale;
   var lg = document.getElementById('showLegendToggle');
   if (lg) lg.checked = !!_settings.showLegend;
+  // Couches d'analyse : reflète l'état courant.
+  Object.keys(LAYER_TOGGLES).forEach(function (name) {
+    var cb = document.getElementById('layer-' + name);
+    if (cb) cb.checked = !!(_settings.layers && _settings.layers[name]);
+  });
 }
 
 function _setRadio(groupClass, value) {
@@ -730,11 +762,13 @@ function saveSettings() {
 
 function resetSettings() {
   _settings = Object.assign({}, GD_SETTINGS_DEFAULT);
+  _settings.layers = Object.assign({}, GD_SETTINGS_DEFAULT.layers);
   _saveSettings();
   _populateSettingsUI();
   _applyTheme(_settings.theme);
   _applyTileStyle(_settings.tile);
   _applyLegendVisibility();
+  _syncLayers();
   toast('Réglages réinitialisés');
 }
 
@@ -784,6 +818,19 @@ function initSettings() {
     if (val) val.textContent = this.value;
     this.style.setProperty('--pct',
       ((this.value - this.min) / (this.max - this.min) * 100) + '%');
+  });
+
+  // Couches d'analyse : application IMMÉDIATE (pas besoin d'Enregistrer)
+  // + persistance + mise à jour de la légende.
+  Object.keys(LAYER_TOGGLES).forEach(function (name) {
+    var cb = document.getElementById('layer-' + name);
+    if (!cb) return;
+    cb.addEventListener('change', function () {
+      _settings.layers[name] = this.checked;
+      _saveSettings();
+      LAYER_TOGGLES[name]();   // inverse l'état effectif (aligné avant le clic)
+      _updateLegend();
+    });
   });
 
   var save = document.getElementById('settingsSave');
