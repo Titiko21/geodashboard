@@ -329,17 +329,22 @@ def _build_admin_categories(admin_filter_value=""):
     from admin_divisions.models import (
         Commune, Departement, District, Region, SousPrefecture, Ville,
     )
+    # Ordre = hiérarchie territoriale descendante (blueprint architecture).
+    # Model=None → niveau prévu par l'architecture mais pas encore alimenté
+    # (rubrique visible, vide) : l'interface est prête à accueillir les données
+    # sans refonte. C'est le cas des Quartiers aujourd'hui.
     specs = [
-        ("Villes",           "ville",          Ville,          True),
-        ("Communes",         "commune",        Commune,        True),
         ("Districts",        "district",       District,       False),
         ("Régions",          "region",         Region,         False),
         ("Départements",     "departement",    Departement,    False),
         ("Sous-préfectures", "sousprefecture", SousPrefecture, False),
+        ("Villes",           "ville",          Ville,          True),
+        ("Communes",         "commune",        Commune,        True),
+        ("Quartiers",        "quartier",       None,           False),
     ]
     cats = []
     for label, level, Model, open_default in specs:
-        entities = [
+        entities = [] if Model is None else [
             {"name": name, "code": code, "select_value": f"{level}:{code}"}
             for code, name in Model.objects.order_by("name").values_list("code", "name")
         ]

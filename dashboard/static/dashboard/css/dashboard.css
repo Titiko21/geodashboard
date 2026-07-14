@@ -210,6 +210,11 @@ body.dark .theme-toggle .th-moon, html[data-theme="dark"] .theme-toggle .th-moon
 }
 .tree-row.selected .tree-count{background:#fff;color:var(--orange-1);border-color:transparent}
 .tree-children{}
+/* Niveau territorial prévu mais pas encore alimenté (Quartiers…) */
+.tree-empty{
+  padding:7px 14px 9px 30px;font-size:11.5px;line-height:1.5;
+  color:var(--ink-3);font-style:italic;
+}
 
 /* Couches (toggles dans le left-panel — onglet "Couches") */
 .layers-list{padding:14px 18px;display:flex;flex-direction:column;gap:12px}
@@ -481,6 +486,8 @@ body.dark .rp-pill{background:rgba(31,138,91,.18)}
 .sd-tile-preview.osm-tiles{background:linear-gradient(135deg,#e8eddf,#c8d5b9)}
 .sd-tile-preview.topo-tiles{background:linear-gradient(135deg,#d4c5a0,#8b7355)}
 .sd-tile-preview.satellite-tiles{background:linear-gradient(135deg,#2d4a3e,#1a2e1f)}
+.sd-tile-preview.gee-tiles{background:linear-gradient(135deg,#1d3a2f,#3f6212 55%,#14532d)}
+.sd-tile-preview.relief-tiles{background:linear-gradient(135deg,#e7e5e4,#a8a29e 55%,#78716c)}
 .sd-tile-label{font-size:11px;font-weight:600;color:var(--ink-2);margin-top:6px;text-align:center}
 
 .sd-footer{padding:14px 22px;border-top:1px solid var(--line);display:flex;gap:10px}

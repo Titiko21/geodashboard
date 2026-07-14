@@ -111,6 +111,15 @@ const _TILE_DEFS = {
     url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
     attribution: 'Tiles &copy; Esri', maxZoom: 19,
   },
+  relief: {
+    // Relief ombré Esri en FOND (analyse topographique) — distinct de la
+    // couche « Relief ombré » superposable des Paramètres → Couches.
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Tiles &copy; Esri', maxZoom: 16,
+  },
+  // 'gee' : fond Sentinel-2 servi par Google Earth Engine — asynchrone
+  // (URL de tuiles obtenue via /api/gee/terrain3d/), géré à part dans
+  // _applyTileStyle. Même flux que l'imagerie drapée de la vue 3D.
 };
 
 function _buildTileLayer(style) {
@@ -121,21 +130,48 @@ function _buildTileLayer(style) {
   });
 }
 
-let _labelsLayer = null;   // toponymie par-dessus le fond Satellite (sans noms)
+let _labelsLayer = null;   // toponymie par-dessus les fonds imagerie (sans noms)
+let _tileToken = 0;        // anti-course : seul le dernier choix de fond gagne
+
+/* Étiquettes claires avec halo, conçues pour fonds sombres/imagerie. */
+function _addImageryLabels() {
+  _labelsLayer = L.tileLayer(
+    'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',
+    { maxZoom: 19, opacity: 0.95 }
+  ).addTo(map);
+}
 
 function _applyTileStyle(style) {
   if (!map) return;
-  if (_tileLayer) map.removeLayer(_tileLayer);
+  var token = ++_tileToken;
+  if (_tileLayer) { map.removeLayer(_tileLayer); _tileLayer = null; }
   if (_labelsLayer) { map.removeLayer(_labelsLayer); _labelsLayer = null; }
-  _tileLayer = _buildTileLayer(style).addTo(map);
-  _tileLayer.bringToBack();
-  if (style === 'satellite') {
-    // Étiquettes claires avec halo, conçues pour fonds sombres/imagerie.
-    _labelsLayer = L.tileLayer(
-      'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',
-      { maxZoom: 19, opacity: 0.95 }
-    ).addTo(map);
+
+  if (style === 'gee') {
+    // Fond Sentinel-2 GEE : l'URL des tuiles vient du backend (asynchrone).
+    _fetch3DConfig()
+      .then(function (cfg) {
+        if (token !== _tileToken || !map) return;   // fond changé entre-temps
+        _tileLayer = L.tileLayer(cfg.imagery_tiles_url, {
+          attribution: 'Sentinel-2 &copy; Copernicus · via Google Earth Engine',
+          maxNativeZoom: 15, maxZoom: 20, className: 'gd-basemap',
+        }).addTo(map);
+        _tileLayer.bringToBack();
+        _addImageryLabels();
+      })
+      .catch(function (err) {
+        if (err === 'session' || token !== _tileToken) return;
+        toast('Fond GEE indisponible — bascule sur Satellite Esri', 'warn');
+        _settings.tile = 'satellite';
+        _saveSettings();
+        _applyTileStyle('satellite');
+      });
+  } else {
+    _tileLayer = _buildTileLayer(style).addTo(map);
+    _tileLayer.bringToBack();
+    if (style === 'satellite') _addImageryLabels();
   }
+
   document.querySelectorAll('[data-basemap]').forEach(function (b) {
     b.classList.toggle('active', b.dataset.basemap === style);
   });
@@ -151,12 +187,8 @@ function initMap(lat, lng, bounds) {
     zoomControl: true,
     zoomSnap: 0.5,
   });
-  _tileLayer = _buildTileLayer(_settings.tile).addTo(map);
+  _applyTileStyle(_settings.tile);   // gère aussi le fond GEE (asynchrone)
   if (_settings.showScale) L.control.scale({ imperial: false }).addTo(map);
-
-  document.querySelectorAll('[data-basemap]').forEach(function (b) {
-    b.classList.toggle('active', b.dataset.basemap === _settings.tile);
-  });
 
   _mapReady = true;
   if (bounds) {
@@ -585,6 +617,7 @@ function _toggle3D(btn) {
     })
     .catch(function (err) {
       if (btn) btn.classList.remove('loading');
+      _setRadio('viewModeBtns', '2d');   // le drawer reste cohérent
       if (err === 'session') return;
       console.warn('[3D] échec :', err);
       toast(err && err.message === 'gee-off'
@@ -597,6 +630,7 @@ function _enter3D(cfg) {
   var area = document.querySelector('.main-area');
   if (area) area.classList.add('mode-3d');
   _mode3d = true;
+  _setRadio('viewModeBtns', '3d');
 
   // Reprend la vue courante de la carte 2D (MapLibre : tuiles 512 px,
   // d'où le décalage de -1 sur le zoom par rapport à Leaflet).
@@ -661,6 +695,7 @@ function _exit3D(btn) {
   var area = document.querySelector('.main-area');
   if (area) area.classList.remove('mode-3d');
   _mode3d = false;
+  _setRadio('viewModeBtns', '2d');
   if (btn) { btn.classList.remove('active'); btn.setAttribute('aria-pressed', 'false'); }
   // Ramène la carte 2D là où l'utilisateur a navigué en 3D.
   if (_map3d && map) {
@@ -858,6 +893,7 @@ function closeSettings() {
 function _populateSettingsUI() {
   _setRadio('themeBtns', _settings.theme);
   _setRadio('densityBtns', _settings.density);
+  _setRadio('viewModeBtns', _mode3d ? '3d' : '2d');
   document.querySelectorAll('.sd-tile-opt').forEach(function (t) {
     t.classList.toggle('active', t.dataset.tile === _settings.tile);
   });
@@ -973,6 +1009,15 @@ function initSettings() {
     if (val) val.textContent = this.value;
     this.style.setProperty('--pct',
       ((this.value - this.min) / (this.max - this.min) * 100) + '%');
+  });
+
+  // Vue 2D / 3D (Paramètres → Carte) : application IMMÉDIATE, même
+  // mécanique que le bouton « 3D » de la carte (état partagé _mode3d).
+  document.querySelectorAll('.viewModeBtns .sd-radio-btn').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var want3d = this.dataset.val === '3d';
+      if (want3d !== _mode3d) _toggle3D(document.querySelector('[data-toggle-3d]'));
+    });
   });
 
   // Couches d'analyse : application IMMÉDIATE (pas besoin d'Enregistrer)

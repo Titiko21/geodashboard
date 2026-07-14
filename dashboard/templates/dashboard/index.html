@@ -57,7 +57,7 @@
             </div>
             <div class="brand-text">
                 <b>GeoDash</b>
-                <small>SIG · Analyse territoriale</small>
+                <small>SIG AGEROUTE</small>
             </div>
         </a>
 
@@ -130,8 +130,10 @@
                         <span class="tree-label"><b>Côte d'Ivoire</b></span>
                         <span class="tree-count">{{ communes_count }}</span>
                     </div>
+                    {# Tous les niveaux territoriaux sont AFFICHÉS, même vides :
+                       l'architecture accueille les futures données (quartiers,
+                       dégradations par niveau…) sans refonte de l'interface. #}
                     {% for cat in admin_categories %}
-                        {% if cat.count %}
                         <div class="tree-row tree-row-district" data-tree-toggle>
                             <span class="caret {% if cat.open %}open{% endif %}">
                                 <svg width="11" height="11" aria-hidden="true"><use href="#i-chev"></use></svg>
@@ -146,9 +148,10 @@
                                 <span class="caret"></span>
                                 <span class="tree-label">{{ e.name }}</span>
                             </div>
+                            {% empty %}
+                            <div class="tree-empty">Aucune donnée pour l'instant — ce niveau sera alimenté prochainement.</div>
                             {% endfor %}
                         </div>
-                        {% endif %}
                     {% endfor %}
                 </div>
             </div>
@@ -236,6 +239,7 @@
         <div class="rp-tabs" role="tablist">
             <button type="button" class="on" data-rp-tab="overview">Vue</button>
             <button type="button" data-rp-tab="flood">Inondation</button>
+            <button type="button" data-rp-tab="degradations">Dégradations</button>
         </div>
 
         <!-- Tab : Vue d'ensemble -->
@@ -416,6 +420,29 @@
             </div>
             {% endif %}
         </div>
+
+        <!-- Tab : Dégradations (réseau routier) — rubrique préparée pour les
+             données VIZIR/AGEROUTE ; sera alimentée en phase ultérieure. -->
+        <div class="rp-panel" data-rp-content="degradations">
+            <div class="rp-card">
+                <div class="rp-card-head">
+                    <div style="min-width:0;flex:1">
+                        <h4>Dégradations du réseau routier</h4>
+                        <small>Module en préparation</small>
+                    </div>
+                </div>
+                <div style="text-align:center;padding:28px 12px;color:var(--ink-3)">
+                    <div style="font-size:28px;margin-bottom:10px">🛣</div>
+                    <div style="font-size:12.5px;line-height:1.6">
+                        Aucune donnée pour l'instant.<br>
+                        Cette rubrique accueillera les relevés de dégradations
+                        (nids-de-poule, fissures, épaufrures…) selon le
+                        référentiel <b>VIZIR / AGEROUTE</b>, avec leur gravité
+                        et leur localisation sur le réseau.
+                    </div>
+                </div>
+            </div>
+        </div>
     </aside>
 
 </div>
@@ -531,6 +558,19 @@
 
         <div class="sd-panel" id="sd-carte" role="tabpanel">
             <div class="sd-section">
+                <div class="sd-section-title">Vue de la carte</div>
+                <div class="sd-row">
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Mode d'affichage</div>
+                        <div class="sd-row-lbl-hint">La 3D drape l'imagerie satellite sur le relief réel (Google Earth Engine)</div>
+                    </div>
+                    <div class="sd-radio-group viewModeBtns">
+                        <button type="button" class="sd-radio-btn active" data-val="2d">2D</button>
+                        <button type="button" class="sd-radio-btn" data-val="3d">3D</button>
+                    </div>
+                </div>
+            </div>
+            <div class="sd-section sd-mt">
                 <div class="sd-section-title">Fond de carte</div>
             </div>
             <div class="sd-tile-grid">
@@ -538,7 +578,9 @@
                 <div class="sd-tile-opt active" data-tile="light"><div class="sd-tile-preview light-tiles"></div><div class="sd-tile-label">CartoDB Clair</div></div>
                 <div class="sd-tile-opt" data-tile="osm"><div class="sd-tile-preview osm-tiles"></div><div class="sd-tile-label">OpenStreetMap</div></div>
                 <div class="sd-tile-opt" data-tile="topo"><div class="sd-tile-preview topo-tiles"></div><div class="sd-tile-label">Topographique</div></div>
-                <div class="sd-tile-opt" data-tile="satellite"><div class="sd-tile-preview satellite-tiles"></div><div class="sd-tile-label">Satellite</div></div>
+                <div class="sd-tile-opt" data-tile="satellite"><div class="sd-tile-preview satellite-tiles"></div><div class="sd-tile-label">Satellite (Esri)</div></div>
+                <div class="sd-tile-opt" data-tile="gee"><div class="sd-tile-preview gee-tiles"></div><div class="sd-tile-label">Satellite GEE · Sentinel-2</div></div>
+                <div class="sd-tile-opt" data-tile="relief"><div class="sd-tile-preview relief-tiles"></div><div class="sd-tile-label">Relief</div></div>
             </div>
             <div class="sd-divider"></div>
             <div class="sd-section sd-mt">
