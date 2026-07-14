@@ -508,6 +508,71 @@ def get_contour_tiles(geom_or_bbox, interval=5):
         return None
 
 
+# ─── Fond 3D — imagerie Sentinel-2 + MNT encodé Terrarium ───────────────────
+#
+# Le mode 3D du frontend (MapLibre GL) a besoin de deux flux de tuiles :
+#   1. une IMAGERIE à draper sur le relief (composite Sentinel-2 vraie couleur) ;
+#   2. un MNT encodé en RGB « Terrarium » — convention où l'altitude est
+#      répartie sur les 3 canaux : alt = (R × 256 + G + B / 256) − 32768.
+#      MapLibre décode ce format nativement (raster-dem, encoding=terrarium)
+#      pour construire le maillage 3D du terrain.
+#
+# Contrairement aux analyses (NDVI, SAR…), le fond n'est PAS clippé sur une
+# emprise : GEE calcule chaque tuile à la demande, où que l'on navigue.
+
+@gee_cached("basemap3d_v1", ttl=60 * 60 * 24)
+def get_3d_basemap():
+    """
+    Tuiles du fond 3D. Renvoie
+    {"imagery_tiles_url", "dem_tiles_url", "encoding"} ou None si GEE off.
+    """
+    init_gee()
+    if not _gee_initialized:
+        return None
+    try:
+        # Imagerie : médiane Sentinel-2 des 12 derniers mois (nuages < 20 %).
+        # 12 mois : en zone tropicale il faut traverser la saison des pluies
+        # pour que chaque pixel ait des observations claires.
+        end = datetime.utcnow()
+        start = end - timedelta(days=365)
+        imagery = (
+            ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+            .filterDate(start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
+            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20))
+            .select(["B4", "B3", "B2"])
+            .median()
+            .visualize(min=0, max=3000, gamma=1.2)
+        )
+        imagery_url = imagery.getMapId()["tile_fetcher"].url_format
+
+        # MNT : Copernicus GLO-30, océan/lagunes (pixels masqués) → 0 m.
+        dem = (
+            ee.ImageCollection("COPERNICUS/DEM/GLO30")
+            .select("DEM").mosaic()
+            .setDefaultProjection("EPSG:4326", None, 30)
+            .unmask(0)
+        )
+        shifted = dem.add(32768.0)
+        terrarium = ee.Image.cat([
+            shifted.divide(256).floor(),          # R : octet de poids fort
+            shifted.mod(256).floor(),             # G : octet de poids faible
+            shifted.mod(1).multiply(256).floor(), # B : fraction (1/256 m)
+        ]).visualize(min=0, max=255)
+        # format=png OBLIGATOIRE : par défaut GEE sert du JPEG (avec perte),
+        # ce qui corrompt l'encodage Terrarium — altitudes décodées absurdes
+        # (vérifié : ~-4000 m en JPEG contre ~50-110 m corrects en PNG).
+        dem_url = terrarium.getMapId({"format": "png"})["tile_fetcher"].url_format
+
+        return {
+            "imagery_tiles_url": imagery_url,
+            "dem_tiles_url": dem_url,
+            "encoding": "terrarium",
+        }
+    except Exception as exc:
+        logger.error("[GEE 3D] échec : %s", exc, exc_info=True)
+        return None
+
+
 # ─── Road Surface Quality — Landsat 8 ────────────────────────────────────────
 
 @gee_cached("road_condition_v2")

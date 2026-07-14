@@ -169,6 +169,8 @@
                 <button type="button" class="tool" data-basemap="topo">Topo</button>
                 <button type="button" class="tool" data-basemap="satellite">Satellite</button>
             </div>
+            <button type="button" class="tool-3d" data-toggle-3d aria-pressed="false"
+                    title="Vue 3D — imagerie et relief Google Earth Engine">3D</button>
             <button type="button" class="icon-tool" data-toggle-fullscreen aria-label="Plein écran" title="Plein écran">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="4 9 4 4 9 4"/><polyline points="20 9 20 4 15 4"/>
@@ -203,6 +205,9 @@
         </div>
 
         <div id="map" role="region" aria-label="Carte géospatiale interactive"></div>
+        <!-- Vue 3D (MapLibre GL) : fond GEE — imagerie Sentinel-2 drapée sur
+             le MNT Copernicus GLO-30. Montée seulement quand le mode 3D est actif. -->
+        <div id="map3d" role="region" aria-label="Vue 3D du terrain (Google Earth Engine)"></div>
     </div>
 
     <!-- ═══════ RIGHT PANEL ══════════════════════════════════ -->

@@ -845,12 +845,33 @@ def api_zone_stats(request, zone_code):
 # ── API — Google Earth Engine ──────────────────────────────────────────────────
 
 from .gee_integration import (
+    get_3d_basemap,
     get_contour_tiles,
     get_flood_extent,
     get_ndvi_stats,
     get_point_elevation,
     get_road_surface_index,
 )
+
+
+@require_GET
+def api_gee_terrain3d(request):
+    """
+    Fond de carte 3D : imagerie Sentinel-2 + MNT Terrarium pour MapLibre GL.
+
+    GET /api/gee/terrain3d/
+    Renvoie {"imagery_tiles_url", "dem_tiles_url", "encoding"} —
+    fond global non clippé, tuiles calculées à la demande par GEE.
+    """
+    try:
+        data = get_3d_basemap()
+    except Exception as exc:
+        logger.error("[GEE 3D] Erreur inattendue : %s", exc)
+        return JsonResponse({"error": f"Erreur GEE : {str(exc)}"}, status=500)
+
+    if data is None:
+        return JsonResponse({"no_data": True}, status=200)
+    return JsonResponse(data)
 
 
 @require_GET
