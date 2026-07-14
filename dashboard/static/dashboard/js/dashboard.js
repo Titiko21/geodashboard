@@ -118,8 +118,8 @@ const _TILE_DEFS = {
     attribution: 'Tiles &copy; Esri', maxZoom: 16,
   },
   // 'gee' : fond Sentinel-2 servi par Google Earth Engine — asynchrone
-  // (URL de tuiles obtenue via /api/gee/terrain3d/), géré à part dans
-  // _applyTileStyle. Même flux que l'imagerie drapée de la vue 3D.
+  // (URL de tuiles obtenue via /api/gee/basemap/), géré à part dans
+  // _applyTileStyle.
 };
 
 function _buildTileLayer(style) {
@@ -149,7 +149,7 @@ function _applyTileStyle(style) {
 
   if (style === 'gee') {
     // Fond Sentinel-2 GEE : l'URL des tuiles vient du backend (asynchrone).
-    _fetch3DConfig()
+    _fetchGeeBasemap()
       .then(function (cfg) {
         if (token !== _tileToken || !map) return;   // fond changé entre-temps
         _tileLayer = L.tileLayer(cfg.imagery_tiles_url, {
@@ -556,153 +556,26 @@ function _toggleRelief(chip) {
 }
 
 
-/* ══════ Vue 3D — MapLibre GL + fond GEE ═══════════════════
-   Fond « précision » : imagerie Sentinel-2 (composite 12 mois,
-   vraie couleur) drapée sur le relief réel du MNT Copernicus
-   GLO-30, tous deux servis en direct par Google Earth Engine
-   (/api/gee/terrain3d/). MapLibre est chargé à la demande au
-   premier passage en 3D — la page reste légère en 2D. */
+/* ══════ Fond GEE (imagerie Sentinel-2 servie par le backend) ═
 
-let _map3d = null;           // instance MapLibre (réutilisée entre bascules)
-let _mode3d = false;
-let _maplibrePromise = null; // chargement unique de la lib
-let _cfg3dPromise = null;    // config tuiles GEE (un seul fetch)
+   L'URL des tuiles vient de /api/gee/basemap/ (composite vraie
+   couleur des 12 derniers mois). Un seul fetch par session. */
 
-const MAPLIBRE_BASE = 'https://cdn.jsdelivr.net/npm/maplibre-gl@5.6.0/dist/maplibre-gl';
+let _geeBasemapPromise = null;
 
-function _loadMapLibre() {
-  if (window.maplibregl) return Promise.resolve();
-  if (_maplibrePromise) return _maplibrePromise;
-  _maplibrePromise = new Promise(function (resolve, reject) {
-    var css = document.createElement('link');
-    css.rel = 'stylesheet';
-    css.href = MAPLIBRE_BASE + '.css';
-    document.head.appendChild(css);
-    var js = document.createElement('script');
-    js.src = MAPLIBRE_BASE + '.js';
-    js.onload = resolve;
-    js.onerror = function () {
-      _maplibrePromise = null;
-      reject(new Error('Chargement MapLibre impossible'));
-    };
-    document.head.appendChild(js);
-  });
-  return _maplibrePromise;
-}
-
-function _fetch3DConfig() {
-  if (!_cfg3dPromise) {
-    _cfg3dPromise = _fetchJSON('/api/gee/terrain3d/').then(function (d) {
-      if (!d || d.no_data || !d.imagery_tiles_url || !d.dem_tiles_url) {
-        _cfg3dPromise = null;   // réessayable
+function _fetchGeeBasemap() {
+  if (!_geeBasemapPromise) {
+    _geeBasemapPromise = _fetchJSON('/api/gee/basemap/').then(function (d) {
+      if (!d || d.no_data || !d.imagery_tiles_url) {
         throw new Error('gee-off');
       }
       return d;
     }).catch(function (err) {
-      _cfg3dPromise = null;
+      _geeBasemapPromise = null;   // réessayable
       throw err;
     });
   }
-  return _cfg3dPromise;
-}
-
-function _toggle3D(btn) {
-  if (_mode3d) { _exit3D(btn); return; }
-  if (btn) btn.classList.add('loading');
-
-  Promise.all([_loadMapLibre(), _fetch3DConfig()])
-    .then(function (res) {
-      if (btn) { btn.classList.remove('loading'); btn.classList.add('active'); btn.setAttribute('aria-pressed', 'true'); }
-      _enter3D(res[1]);
-    })
-    .catch(function (err) {
-      if (btn) btn.classList.remove('loading');
-      _setRadio('viewModeBtns', '2d');   // le drawer reste cohérent
-      if (err === 'session') return;
-      console.warn('[3D] échec :', err);
-      toast(err && err.message === 'gee-off'
-        ? 'Fond 3D indisponible — service GEE hors ligne'
-        : 'Vue 3D indisponible', 'err');
-    });
-}
-
-function _enter3D(cfg) {
-  var area = document.querySelector('.main-area');
-  if (area) area.classList.add('mode-3d');
-  _mode3d = true;
-  _setRadio('viewModeBtns', '3d');
-
-  // Reprend la vue courante de la carte 2D (MapLibre : tuiles 512 px,
-  // d'où le décalage de -1 sur le zoom par rapport à Leaflet).
-  var c = map ? map.getCenter() : { lat: 5.35, lng: -4.0 };
-  var z = map ? map.getZoom() - 1 : 10;
-
-  if (_map3d) {
-    _map3d.jumpTo({ center: [c.lng, c.lat], zoom: z });
-    _map3d.resize();
-    return;
-  }
-
-  _map3d = new maplibregl.Map({
-    container: 'map3d',
-    center: [c.lng, c.lat],
-    zoom: z,
-    pitch: 60,          // vue inclinée d'emblée : le relief se lit tout de suite
-    bearing: 0,
-    maxPitch: 80,
-    attributionControl: { compact: true },
-    style: {
-      version: 8,
-      sources: {
-        'gee-imagery': {
-          type: 'raster',
-          tiles: [cfg.imagery_tiles_url],
-          tileSize: 256,
-          maxzoom: 15,   // au-delà, suréchantillonnage local (S2 = 10 m)
-          attribution: 'Imagerie Sentinel-2 & MNT GLO-30 © Copernicus · via Google Earth Engine',
-        },
-        'gee-dem': {
-          type: 'raster-dem',
-          tiles: [cfg.dem_tiles_url],
-          tileSize: 256,
-          encoding: cfg.encoding || 'terrarium',
-          maxzoom: 12,   // GLO-30 = 30 m : inutile de recalculer plus fin
-        },
-      },
-      layers: [
-        { id: 'bg', type: 'background', paint: { 'background-color': '#0b1526' } },
-        { id: 'gee-imagery', type: 'raster', source: 'gee-imagery' },
-      ],
-      sky: {
-        'sky-color': '#87b6d8',
-        'horizon-color': '#e8f1f8',
-        'fog-color': '#dde8f0',
-        'sky-horizon-blend': 0.6,
-        'horizon-fog-blend': 0.6,
-        'fog-ground-blend': 0.85,
-      },
-    },
-  });
-  _map3d.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-left');
-  _map3d.on('load', function () {
-    // Exagération légère : la région d'Abidjan est peu marquée (< 150 m) —
-    // sans elle, le relief serait imperceptible.
-    _map3d.setTerrain({ source: 'gee-dem', exaggeration: 1.6 });
-  });
-}
-
-function _exit3D(btn) {
-  var area = document.querySelector('.main-area');
-  if (area) area.classList.remove('mode-3d');
-  _mode3d = false;
-  _setRadio('viewModeBtns', '2d');
-  if (btn) { btn.classList.remove('active'); btn.setAttribute('aria-pressed', 'false'); }
-  // Ramène la carte 2D là où l'utilisateur a navigué en 3D.
-  if (_map3d && map) {
-    var c = _map3d.getCenter();
-    map.setView([c.lat, c.lng], Math.round(_map3d.getZoom()) + 1);
-    map.invalidateSize();
-  }
+  return _geeBasemapPromise;
 }
 
 
@@ -821,19 +694,14 @@ function initEventListeners() {
   // (Les couches d'analyse se gèrent dans Paramètres → Couches,
   //  cf. initSettings — plus de chips sur la carte.)
 
-  // Fonds de carte (choisir un fond 2D quitte le mode 3D)
+  // Fonds de carte
   document.querySelectorAll('[data-basemap]').forEach(function (btn) {
     btn.addEventListener('click', function () {
-      if (_mode3d) _exit3D(document.querySelector('[data-toggle-3d]'));
       _settings.tile = this.dataset.basemap;
       _applyTileStyle(_settings.tile);
       _saveSettings();
     });
   });
-
-  // Vue 3D (fond GEE : imagerie Sentinel-2 + relief GLO-30)
-  var btn3d = document.querySelector('[data-toggle-3d]');
-  if (btn3d) btn3d.addEventListener('click', function () { _toggle3D(this); });
 
   // Plein écran
   var fsBtn = document.querySelector('[data-toggle-fullscreen]');
@@ -844,10 +712,7 @@ function initEventListeners() {
     } else if (document.exitFullscreen) {
       document.exitFullscreen();
     }
-    setTimeout(function () {
-      if (map) map.invalidateSize();
-      if (_map3d) _map3d.resize();
-    }, 350);
+    setTimeout(function () { if (map) map.invalidateSize(); }, 350);
   });
 
   // Bouton « Tout afficher » (reset filtre admin)
@@ -893,7 +758,6 @@ function closeSettings() {
 function _populateSettingsUI() {
   _setRadio('themeBtns', _settings.theme);
   _setRadio('densityBtns', _settings.density);
-  _setRadio('viewModeBtns', _mode3d ? '3d' : '2d');
   document.querySelectorAll('.sd-tile-opt').forEach(function (t) {
     t.classList.toggle('active', t.dataset.tile === _settings.tile);
   });
@@ -1009,15 +873,6 @@ function initSettings() {
     if (val) val.textContent = this.value;
     this.style.setProperty('--pct',
       ((this.value - this.min) / (this.max - this.min) * 100) + '%');
-  });
-
-  // Vue 2D / 3D (Paramètres → Carte) : application IMMÉDIATE, même
-  // mécanique que le bouton « 3D » de la carte (état partagé _mode3d).
-  document.querySelectorAll('.viewModeBtns .sd-radio-btn').forEach(function (b) {
-    b.addEventListener('click', function () {
-      var want3d = this.dataset.val === '3d';
-      if (want3d !== _mode3d) _toggle3D(document.querySelector('[data-toggle-3d]'));
-    });
   });
 
   // Couches d'analyse : application IMMÉDIATE (pas besoin d'Enregistrer)

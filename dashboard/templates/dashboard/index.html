@@ -130,9 +130,11 @@
                         <span class="tree-label"><b>Côte d'Ivoire</b></span>
                         <span class="tree-count">{{ communes_count }}</span>
                     </div>
-                    {# Tous les niveaux territoriaux sont AFFICHÉS, même vides :
+                    {% comment %}
+                       Tous les niveaux territoriaux sont AFFICHÉS, même vides :
                        l'architecture accueille les futures données (quartiers,
-                       dégradations par niveau…) sans refonte de l'interface. #}
+                       dégradations par niveau…) sans refonte de l'interface.
+                    {% endcomment %}
                     {% for cat in admin_categories %}
                         <div class="tree-row tree-row-district" data-tree-toggle>
                             <span class="caret {% if cat.open %}open{% endif %}">
@@ -172,8 +174,6 @@
                 <button type="button" class="tool" data-basemap="topo">Topo</button>
                 <button type="button" class="tool" data-basemap="satellite">Satellite</button>
             </div>
-            <button type="button" class="tool-3d" data-toggle-3d aria-pressed="false"
-                    title="Vue 3D — imagerie et relief Google Earth Engine">3D</button>
             <button type="button" class="icon-tool" data-toggle-fullscreen aria-label="Plein écran" title="Plein écran">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="4 9 4 4 9 4"/><polyline points="20 9 20 4 15 4"/>
@@ -208,9 +208,6 @@
         </div>
 
         <div id="map" role="region" aria-label="Carte géospatiale interactive"></div>
-        <!-- Vue 3D (MapLibre GL) : fond GEE — imagerie Sentinel-2 drapée sur
-             le MNT Copernicus GLO-30. Montée seulement quand le mode 3D est actif. -->
-        <div id="map3d" role="region" aria-label="Vue 3D du terrain (Google Earth Engine)"></div>
     </div>
 
     <!-- ═══════ RIGHT PANEL ══════════════════════════════════ -->
@@ -222,13 +219,21 @@
                 </span>
                 <h2 id="rpName">{% if admin_label %}{{ admin_label }}{% else %}Grand Abidjan{% endif %}</h2>
                 <div class="rp-sub" id="rpSub">
+                    {% comment %}
+                       Les agrégats globaux (nb de communes, susceptibilité
+                       moyenne) ne s'affichent qu'en vue globale : sous une
+                       entité sélectionnée ils étaient incohérents (« Abobo —
+                       14 communes »). L'entité a ses propres KPIs plus bas.
+                    {% endcomment %}
+                    {% if not admin_label %}
                     <span><b>{{ communes_count }}</b> commune{{ communes_count|pluralize }}</span>
                     {% if flood_avg %}
                     <span class="dot-sep"></span>
                     <span>susceptibilité moyenne <b>{{ flood_avg }}</b>/100</span>
                     {% endif %}
+                    {% endif %}
                     {% if last_update %}
-                    <span class="dot-sep"></span>
+                    {% if not admin_label %}<span class="dot-sep"></span>{% endif %}
                     <span>MAJ <span id="lastUpd">{{ last_update|date:"H:i" }}</span></span>
                     {% endif %}
                 </div>
@@ -558,19 +563,6 @@
 
         <div class="sd-panel" id="sd-carte" role="tabpanel">
             <div class="sd-section">
-                <div class="sd-section-title">Vue de la carte</div>
-                <div class="sd-row">
-                    <div class="sd-row-lbl">
-                        <div class="sd-row-lbl-main">Mode d'affichage</div>
-                        <div class="sd-row-lbl-hint">La 3D drape l'imagerie satellite sur le relief réel (Google Earth Engine)</div>
-                    </div>
-                    <div class="sd-radio-group viewModeBtns">
-                        <button type="button" class="sd-radio-btn active" data-val="2d">2D</button>
-                        <button type="button" class="sd-radio-btn" data-val="3d">3D</button>
-                    </div>
-                </div>
-            </div>
-            <div class="sd-section sd-mt">
                 <div class="sd-section-title">Fond de carte</div>
             </div>
             <div class="sd-tile-grid">
