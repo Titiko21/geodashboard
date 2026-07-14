@@ -13,7 +13,7 @@
 let map = null;
 let _mapReady = false;
 let _tileLayer = null;
-let _geeLayers = {};    // overlays tuiles GEE actifs (ndvi/sar/contours)
+let _geeLayers = {};    // overlays tuiles GEE actifs (ndvi/sar)
 let lHillshade = null;  // relief ombré (Esri World Hillshade)
 let lZones = null;      // L.geoJSON des communes cliquables
 
@@ -34,7 +34,10 @@ const GD_SETTINGS_DEFAULT = {
   showLegend: true,
   // Couches d'analyse (Paramètres → Couches). Par défaut : seuls les
   // relevés observés — la carte reste sobre.
-  layers: { events: true, heat: false, ndvi: false, sar: false, contours: false, relief: false },
+  // NB : les courbes de niveau ont été retirées de l'UI le 2026-07-14
+  // (décision produit) ; le service backend /api/gee/contours/ reste
+  // disponible et validé pour une réexposition future.
+  layers: { events: true, heat: false, ndvi: false, sar: false, relief: false },
 };
 let _settings = Object.assign({}, GD_SETTINGS_DEFAULT);
 
@@ -210,12 +213,11 @@ function initMap(lat, lng, bounds) {
 /* Bascule effective de chaque couche (les fonctions _toggle* inversent
    l'état courant ; l'état désiré vit dans _settings.layers). */
 const LAYER_TOGGLES = {
-  events:   function () { _toggleFloodEvents(null); },
-  heat:     function () { _toggleFloodHeat(null); },
-  ndvi:     function () { _toggleGeeOverlay('ndvi', null); },
-  sar:      function () { _toggleGeeOverlay('sar', null); },
-  contours: function () { _toggleContours(); },
-  relief:   function () { _toggleRelief(null); },
+  events: function () { _toggleFloodEvents(null); },
+  heat:   function () { _toggleFloodHeat(null); },
+  ndvi:   function () { _toggleGeeOverlay('ndvi', null); },
+  sar:    function () { _toggleGeeOverlay('sar', null); },
+  relief: function () { _toggleRelief(null); },
 };
 
 /* État effectif d'une couche sur la carte. */
@@ -223,7 +225,6 @@ function _layerActive(name) {
   if (name === 'events') return !!lFloodEvents;
   if (name === 'heat') return !!lFloodHeat;
   if (name === 'relief') return !!lHillshade;
-  if (name === 'contours') return _contoursOn;
   return !!_geeLayers[name];
 }
 
@@ -267,7 +268,9 @@ function _probeElevation(e) {
             ? '<br>Au-dessus du drainage : <b>' + d.hand_m.toFixed(1) + ' m</b>'
               + (d.hand_m < 5 ? ' <span style="color:#dc2626;font-weight:700">— zone basse</span>' : '')
             : '')
-        + '<br><small style="color:#64748b">' + ll.lat.toFixed(5) + ', ' + ll.lng.toFixed(5) + '</small>';
+        + '<br><small style="color:#64748b">' + ll.lat.toFixed(5) + ', ' + ll.lng.toFixed(5)
+        + '<br>Source : MNT Copernicus GLO-30 (30 m, ±4 m) · drainage MERIT Hydro.'
+        + '<br>Croisé avec SRTM, NASADEM et FABDEM le 14/07/2026 (écarts &lt; 7 m).</small>';
       popup.setContent(html);
     })
     .catch(function (err) {
@@ -496,12 +499,11 @@ function _toggleFloodHeat(chip) {
 }
 
 
-/* ══════ Overlays GEE (NDVI · SAR · Courbes de niveau) ═════ */
+/* ══════ Overlays GEE (NDVI · SAR) ═════════════════════════ */
 
 const GEE_OVERLAY_DEFS = {
   ndvi: { url: '/api/gee/ndvi/',  opacity: 0.62, empty: 'NDVI indisponible sur cette emprise' },
   sar:  { url: '/api/gee/flood/', opacity: 0.70, empty: 'Pas de détection SAR récente' },
-  // (les courbes de niveau sont vectorielles — logique dédiée plus bas)
 };
 
 function _geeQuery() {
@@ -536,115 +538,6 @@ function _toggleGeeOverlay(name, chip) {
       console.warn('[GEE ' + name + '] échec :', err);
       toast('Service GEE indisponible', 'err');
     });
-}
-
-
-/* ══════ Courbes de niveau vectorielles (cotes altimétriques) ══
-
-   Standard topographique : isolignes fines tous les `interval` m,
-   MAÎTRESSES épaissies portant leur COTE (altitude / niveau mer).
-   Recalculées sur l'emprise visible à chaque déplacement (comme
-   toute carte topo, c'est un détail local) ; équidistance adaptée
-   au zoom : 20 m (vue large) → 10 m → 5 m (vue rapprochée). */
-
-let lContours = null;          // layerGroup : lignes + étiquettes de cote
-let _contoursOn = false;
-let _contoursSeq = 0;          // anti-course entre déplacements successifs
-let _contoursMoveBound = false;
-let _contoursHintShown = false;
-
-const CONTOUR_MIN_ZOOM = 11;
-
-function _contourInterval(zoom) {
-  if (zoom >= 15) return 5;
-  if (zoom >= 13) return 10;
-  return 20;
-}
-
-function _clearContours() {
-  if (lContours && map) { map.removeLayer(lContours); }
-  lContours = null;
-}
-
-function _toggleContours() {
-  if (!map) return;
-  _contoursOn = !_contoursOn;
-  if (!_contoursOn) { _clearContours(); return; }
-  if (!_contoursMoveBound) {
-    _contoursMoveBound = true;
-    map.on('moveend', function () { if (_contoursOn) _refreshContours(); });
-  }
-  _refreshContours();
-}
-
-function _refreshContours() {
-  if (!map || !_contoursOn) return;
-  var zoom = map.getZoom();
-  if (zoom < CONTOUR_MIN_ZOOM) {
-    _clearContours();
-    if (!_contoursHintShown) {
-      _contoursHintShown = true;
-      toast('Zoomez pour afficher les courbes de niveau', 'warn');
-    }
-    return;
-  }
-  var seq = ++_contoursSeq;
-  var b = map.getBounds();
-  var bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]
-    .map(function (v) { return v.toFixed(4); }).join(',');
-  _fetchJSON('/api/gee/contours/?bbox=' + bbox + '&interval=' + _contourInterval(zoom))
-    .then(function (d) {
-      if (seq !== _contoursSeq || !_contoursOn) return;   // vue déjà changée
-      if (!d || d.no_data || !d.features) {
-        toast('Courbes de niveau indisponibles ici', 'warn');
-        return;
-      }
-      _renderContours(d);
-    })
-    .catch(function (err) {
-      if (err === 'session') return;
-      console.warn('[Contours] échec :', err);
-      toast('Courbes de niveau indisponibles', 'err');
-    });
-}
-
-function _renderContours(fc) {
-  _clearContours();
-  var iv = fc.interval || 10;
-  var legendIv = document.getElementById('legendContourIv');
-  if (legendIv) {
-    legendIv.textContent = 'équidistance ' + iv + ' m · cote sur les maîtresses';
-  }
-  var labels = [];
-  var lines = L.geoJSON(fc, {
-    interactive: false,
-    style: function (f) {
-      var major = f.properties && f.properties.major;
-      return {
-        color:   major ? '#5c4030' : '#a5825f',
-        weight:  major ? 1.8 : 1.0,
-        opacity: major ? 0.9 : 0.65,
-      };
-    },
-    onEachFeature: function (f, layer) {
-      // Cote altimétrique posée au milieu de chaque courbe MAÎTRESSE —
-      // lisible sans surcharger (les fines s'interpolent visuellement).
-      if (!f.properties || !f.properties.major) return;
-      var coords = f.geometry && f.geometry.coordinates;
-      if (!coords || coords.length < 6 || labels.length >= 60) return;
-      var mid = coords[Math.floor(coords.length / 2)];
-      labels.push(L.marker([mid[1], mid[0]], {
-        interactive: false,
-        keyboard: false,
-        icon: L.divIcon({
-          className: 'contour-label',
-          html: '<span>' + f.properties.elev + ' m</span>',
-          iconSize: null,
-        }),
-      }));
-    },
-  });
-  lContours = L.layerGroup([lines].concat(labels)).addTo(map);
 }
 
 

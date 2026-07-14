@@ -190,7 +190,6 @@
             <div class="ml-row" data-legend="heat" style="display:none"><div class="ml-line" style="background:linear-gradient(90deg,#3b82f6,#22c55e,#eab308,#ef4444);height:8px;border-radius:4px"></div>Concentration d'inondations (faible → forte)</div>
             <div class="ml-row" data-legend="ndvi" style="display:none"><div class="ml-line" style="background:linear-gradient(90deg,#d73027,#fee08b,#1a9850);height:8px;border-radius:4px"></div>Végétation (rare → dense)</div>
             <div class="ml-row" data-legend="sar" style="display:none"><div class="ml-poly" style="background:#3b82f6"></div>Eau détectée par radar (15 derniers jours)</div>
-            <div class="ml-row" data-legend="contours" style="display:none"><div class="ml-line" style="background:#8b6b4a"></div>Courbe de niveau — <span id="legendContourIv">cote en mètres</span></div>
             <div class="ml-row" data-legend-roads style="display:none"><div class="ml-line" style="background:linear-gradient(90deg,#334155,#d97706,#92400e);height:4px;border-radius:2px"></div>Routes (couleur = type de surface)</div>
             <div class="ml-row" data-legend="relief" style="display:none"><div class="ml-poly" style="background:linear-gradient(135deg,#e2e8f0,#64748b)"></div>Relief ombré (creux et crêtes)</div>
             <div class="ml-row"><div class="ml-line" style="background:#64748b"></div>Limite de commune</div>
@@ -570,13 +569,6 @@
             </div>
             <div class="sd-section sd-mt">
                 <div class="sd-section-title">Terrain</div>
-                <div class="sd-row">
-                    <div class="sd-row-lbl">
-                        <div class="sd-row-lbl-main">Courbes de niveau</div>
-                        <div class="sd-row-lbl-hint">Altitude : courbes fines tous les 5 m, maîtresses tous les 25 m</div>
-                    </div>
-                    <label class="sd-toggle"><input type="checkbox" id="layer-contours"><span class="sd-toggle-track"></span></label>
-                </div>
                 <div class="sd-row">
                     <div class="sd-row-lbl">
                         <div class="sd-row-lbl-main">Relief ombré</div>

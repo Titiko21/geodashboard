@@ -982,6 +982,12 @@ def api_gee_contours(request):
     Courbes de niveau VECTORIELLES (cotes altimétriques incluses) pour
     l'emprise visible de la carte.
 
+    NB : NON EXPOSÉ dans l'UI depuis le 2026-07-14 (décision produit —
+    affichage réservé aux données validées terrain). Les données ont été
+    contre-expertisées le même jour : GLO-30 ≈ SRTM ≈ NASADEM ≈ FABDEM
+    (écarts < 7 m) et aéroport FHB mesuré à 6 m contre 6,4 m officiels.
+    Le service reste disponible pour une réexposition future.
+
     GET /api/gee/contours/?bbox=<w>,<s>,<e>,<n>&interval=<m>
         bbox     : emprise visible (degrés WGS84), obligatoire
         interval : équidistance en mètres (défaut 10, bornes 2-100)
