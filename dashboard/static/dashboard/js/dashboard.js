@@ -214,7 +214,7 @@ const LAYER_TOGGLES = {
   heat:     function () { _toggleFloodHeat(null); },
   ndvi:     function () { _toggleGeeOverlay('ndvi', null); },
   sar:      function () { _toggleGeeOverlay('sar', null); },
-  contours: function () { _toggleGeeOverlay('contours', null); },
+  contours: function () { _toggleContours(); },
   relief:   function () { _toggleRelief(null); },
 };
 
@@ -223,6 +223,7 @@ function _layerActive(name) {
   if (name === 'events') return !!lFloodEvents;
   if (name === 'heat') return !!lFloodHeat;
   if (name === 'relief') return !!lHillshade;
+  if (name === 'contours') return _contoursOn;
   return !!_geeLayers[name];
 }
 
@@ -498,9 +499,9 @@ function _toggleFloodHeat(chip) {
 /* ══════ Overlays GEE (NDVI · SAR · Courbes de niveau) ═════ */
 
 const GEE_OVERLAY_DEFS = {
-  ndvi:     { url: '/api/gee/ndvi/',     opacity: 0.62, empty: 'NDVI indisponible sur cette emprise' },
-  sar:      { url: '/api/gee/flood/',    opacity: 0.70, empty: 'Pas de détection SAR récente' },
-  contours: { url: '/api/gee/contours/', opacity: 0.80, empty: 'Courbes de niveau indisponibles' },
+  ndvi: { url: '/api/gee/ndvi/',  opacity: 0.62, empty: 'NDVI indisponible sur cette emprise' },
+  sar:  { url: '/api/gee/flood/', opacity: 0.70, empty: 'Pas de détection SAR récente' },
+  // (les courbes de niveau sont vectorielles — logique dédiée plus bas)
 };
 
 function _geeQuery() {
@@ -538,6 +539,115 @@ function _toggleGeeOverlay(name, chip) {
 }
 
 
+/* ══════ Courbes de niveau vectorielles (cotes altimétriques) ══
+
+   Standard topographique : isolignes fines tous les `interval` m,
+   MAÎTRESSES épaissies portant leur COTE (altitude / niveau mer).
+   Recalculées sur l'emprise visible à chaque déplacement (comme
+   toute carte topo, c'est un détail local) ; équidistance adaptée
+   au zoom : 20 m (vue large) → 10 m → 5 m (vue rapprochée). */
+
+let lContours = null;          // layerGroup : lignes + étiquettes de cote
+let _contoursOn = false;
+let _contoursSeq = 0;          // anti-course entre déplacements successifs
+let _contoursMoveBound = false;
+let _contoursHintShown = false;
+
+const CONTOUR_MIN_ZOOM = 11;
+
+function _contourInterval(zoom) {
+  if (zoom >= 15) return 5;
+  if (zoom >= 13) return 10;
+  return 20;
+}
+
+function _clearContours() {
+  if (lContours && map) { map.removeLayer(lContours); }
+  lContours = null;
+}
+
+function _toggleContours() {
+  if (!map) return;
+  _contoursOn = !_contoursOn;
+  if (!_contoursOn) { _clearContours(); return; }
+  if (!_contoursMoveBound) {
+    _contoursMoveBound = true;
+    map.on('moveend', function () { if (_contoursOn) _refreshContours(); });
+  }
+  _refreshContours();
+}
+
+function _refreshContours() {
+  if (!map || !_contoursOn) return;
+  var zoom = map.getZoom();
+  if (zoom < CONTOUR_MIN_ZOOM) {
+    _clearContours();
+    if (!_contoursHintShown) {
+      _contoursHintShown = true;
+      toast('Zoomez pour afficher les courbes de niveau', 'warn');
+    }
+    return;
+  }
+  var seq = ++_contoursSeq;
+  var b = map.getBounds();
+  var bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]
+    .map(function (v) { return v.toFixed(4); }).join(',');
+  _fetchJSON('/api/gee/contours/?bbox=' + bbox + '&interval=' + _contourInterval(zoom))
+    .then(function (d) {
+      if (seq !== _contoursSeq || !_contoursOn) return;   // vue déjà changée
+      if (!d || d.no_data || !d.features) {
+        toast('Courbes de niveau indisponibles ici', 'warn');
+        return;
+      }
+      _renderContours(d);
+    })
+    .catch(function (err) {
+      if (err === 'session') return;
+      console.warn('[Contours] échec :', err);
+      toast('Courbes de niveau indisponibles', 'err');
+    });
+}
+
+function _renderContours(fc) {
+  _clearContours();
+  var iv = fc.interval || 10;
+  var legendIv = document.getElementById('legendContourIv');
+  if (legendIv) {
+    legendIv.textContent = 'équidistance ' + iv + ' m · cote sur les maîtresses';
+  }
+  var labels = [];
+  var lines = L.geoJSON(fc, {
+    interactive: false,
+    style: function (f) {
+      var major = f.properties && f.properties.major;
+      return {
+        color:   major ? '#5c4030' : '#a5825f',
+        weight:  major ? 1.8 : 1.0,
+        opacity: major ? 0.9 : 0.65,
+      };
+    },
+    onEachFeature: function (f, layer) {
+      // Cote altimétrique posée au milieu de chaque courbe MAÎTRESSE —
+      // lisible sans surcharger (les fines s'interpolent visuellement).
+      if (!f.properties || !f.properties.major) return;
+      var coords = f.geometry && f.geometry.coordinates;
+      if (!coords || coords.length < 6 || labels.length >= 60) return;
+      var mid = coords[Math.floor(coords.length / 2)];
+      labels.push(L.marker([mid[1], mid[0]], {
+        interactive: false,
+        keyboard: false,
+        icon: L.divIcon({
+          className: 'contour-label',
+          html: '<span>' + f.properties.elev + ' m</span>',
+          iconSize: null,
+        }),
+      }));
+    },
+  });
+  lContours = L.layerGroup([lines].concat(labels)).addTo(map);
+}
+
+
 /* ══════ Relief ombré (hillshade — lisibilité du terrain) ══ */
 
 function _toggleRelief(chip) {
@@ -553,6 +663,133 @@ function _toggleRelief(chip) {
     { opacity: 0.45, maxZoom: 16 }
   ).addTo(map);
   if (chip) chip.classList.add('on');
+}
+
+
+/* ══════ Inventaire des routes (filtres par type de surface) ══
+
+   Le panneau « Routes » liste les types de surface RÉELLEMENT présents
+   en base (via /api/roads/inventory/) avec compteurs et kilométrages.
+   Chaque type coché s'affiche sur la carte dans sa couleur. */
+
+const ROAD_COLORS = {
+  bitume:  '#334155',
+  pave:    '#7c3aed',
+  gravier: '#d97706',
+  terre:   '#92400e',
+  autre:   '#64748b',
+};
+
+let lRoads = null;
+let _roadsSeq = 0;
+
+function _esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function loadRoadInventory() {
+  var list = document.getElementById('roadsInvList');
+  if (!list) return;
+  _fetchJSON('/api/roads/inventory/' + (window.location.search || ''))
+    .then(function (d) {
+      var scope = document.getElementById('roadsInvScope');
+      var total = document.getElementById('roadsInvTotal');
+      var empty = document.getElementById('roadsInvEmpty');
+      var hint  = document.getElementById('roadsInvHint');
+      if (scope) scope.textContent = d.scope || 'Réseau';
+      if (total) total.textContent = (d.total_km || 0) + ' km';
+      if (!d.total_count) {
+        if (empty) empty.style.display = '';
+        return;
+      }
+      if (hint) hint.style.display = '';
+      list.innerHTML = '';
+      d.types.forEach(function (t) {
+        if (!t.count) return;   // seuls les types présents en base
+        var color = ROAD_COLORS[t.code] || ROAD_COLORS.autre;
+        var row = document.createElement('label');
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;' +
+          'padding:7px 0;border-bottom:1px dashed var(--line-2);' +
+          'font-size:12px;cursor:pointer';
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.dataset.roadType = t.code;
+        cb.style.accentColor = color;
+        cb.addEventListener('change', _refreshRoadsLayer);
+        var swatch = document.createElement('span');
+        swatch.style.cssText = 'width:14px;height:4px;border-radius:2px;' +
+          'flex:none;background:' + color;
+        var name = document.createElement('span');
+        name.style.cssText = 'flex:1;min-width:0';
+        name.textContent = t.label;
+        var stats = document.createElement('span');
+        stats.style.color = 'var(--ink-3)';
+        stats.innerHTML = '<b style="color:var(--ink)">' + t.count + '</b> seg · ' + t.km + ' km';
+        row.append(cb, swatch, name, stats);
+        list.appendChild(row);
+      });
+    })
+    .catch(function (err) {
+      if (err === 'session') return;
+      var scope = document.getElementById('roadsInvScope');
+      if (scope) scope.textContent = 'Inventaire indisponible';
+      console.warn('[Routes] inventaire échoué :', err);
+    });
+}
+
+function _refreshRoadsLayer() {
+  if (!map) return;
+  var checked = Array.prototype.map.call(
+    document.querySelectorAll('[data-road-type]:checked'),
+    function (cb) { return cb.dataset.roadType; }
+  );
+  var legend = document.querySelector('[data-legend-roads]');
+  if (!checked.length) {
+    if (lRoads) { map.removeLayer(lRoads); lRoads = null; }
+    if (legend) legend.style.display = 'none';
+    return;
+  }
+  var seq = ++_roadsSeq;
+  var qs = new URLSearchParams(window.location.search);
+  qs.set('surface', checked.join(','));
+  _fetchJSON('/api/roads/export/?' + qs.toString())
+    .then(function (d) {
+      if (seq !== _roadsSeq) return;   // sélection déjà modifiée
+      if (lRoads) { map.removeLayer(lRoads); lRoads = null; }
+      if (!d || !d.features || !d.features.length) {
+        toast('Aucune route pour cette sélection', 'warn');
+        if (legend) legend.style.display = 'none';
+        return;
+      }
+      lRoads = L.geoJSON(d, {
+        style: function (f) {
+          var p = f.properties || {};
+          return {
+            color:   ROAD_COLORS[p.surface_type] || ROAD_COLORS.autre,
+            weight:  p.is_strategic ? 3 : 1.8,
+            opacity: 0.85,
+          };
+        },
+        onEachFeature: function (f, layer) {
+          var p = f.properties || {};
+          layer.bindPopup(
+            '<b>' + _esc(p.name || 'Route') + '</b>'
+            + '<br>Surface : ' + _esc(p.surface_label || p.surface_type || '—')
+            + '<br>État : ' + _esc(p.status_label || '—')
+            + (p.condition_score != null
+                ? ' (' + Math.round(p.condition_score) + '/100)' : '')
+          );
+        },
+      }).addTo(map);
+      if (legend) legend.style.display = '';
+    })
+    .catch(function (err) {
+      if (err === 'session') return;
+      console.warn('[Routes] couche échouée :', err);
+      toast('Routes indisponibles', 'err');
+    });
 }
 
 

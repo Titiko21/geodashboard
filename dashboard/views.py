@@ -755,14 +755,26 @@ def api_roads_export(request):
     """
     Export des segments routiers en GeoJSON FeatureCollection.
     Paramètres GET :
-      - zone : code zone (optionnel)
-      - fmt  : format (geojson uniquement pour l'instant)
+      - zone    : code zone (optionnel)
+      - admin   : <level>:<code> — restreint au polygone admin (optionnel)
+      - surface : liste CSV de types de surface (bitume,terre,…) (optionnel)
+      - fmt     : format (geojson uniquement pour l'instant)
     """
     zone_code     = request.GET.get("zone", "")
     selected_zone = Zone.objects.filter(code=zone_code).first() if zone_code else None
 
     qs = RoadSegment.objects.filter(zone=selected_zone) if selected_zone \
          else RoadSegment.objects.all()
+
+    # Filtre admin spatial (même sémantique que l'inventaire).
+    _lvl, admin_obj = _parse_admin_filter(request)
+    if admin_obj is not None and getattr(admin_obj, "geom", None) is not None:
+        qs = qs.filter(geom__isnull=False, geom__intersects=admin_obj.geom)
+
+    # Filtre par type(s) de surface — alimente l'inventaire des routes.
+    surfaces = [t.strip() for t in (request.GET.get("surface") or "").split(",") if t.strip()]
+    if surfaces:
+        qs = qs.filter(surface_type__in=surfaces)
 
     features = []
     for r in qs:
@@ -779,6 +791,8 @@ def api_roads_export(request):
                 "status_label":    r.get_status_display(),
                 "condition_score": r.condition_score,
                 "surface_type":    r.surface_type,
+                "surface_label":   r.get_surface_type_display(),
+                "is_strategic":    r.is_strategic,
                 "notes":           r.notes,
                 "zone":            r.zone.name if r.zone else "",
                 "zone_code":       r.zone.code if r.zone else "",
@@ -802,6 +816,67 @@ def api_roads_export(request):
 
     logger.info("Export GeoJSON routes — %d features (zone: %s)", len(features), zone_code or "toutes")
     return response
+
+
+@require_GET
+def api_roads_inventory(request):
+    """
+    Inventaire du réseau routier : agrégats par type de surface (nombre de
+    segments + kilométrage réel PostGIS), pour le panneau « Routes ».
+
+    GET /api/roads/inventory/?admin=<level>:<code>   (optionnel)
+
+    Renvoie {"total_count", "total_km", "types": [{code, label, count, km}]}.
+    Tous les types du référentiel sont présents (count 0 si vide) + les
+    éventuelles classifications hors référentiel trouvées dans les données —
+    l'interface reflète TOUJOURS ce que la base contient réellement.
+    """
+    from django.contrib.gis.db.models.functions import Length
+    from django.db.models import Count, Sum
+
+    qs = RoadSegment.objects.filter(geom__isnull=False)
+    _lvl, admin_obj = _parse_admin_filter(request)
+    if admin_obj is not None and getattr(admin_obj, "geom", None) is not None:
+        qs = qs.filter(geom__intersects=admin_obj.geom)
+
+    rows = qs.values("surface_type").annotate(
+        n=Count("id"),
+        meters=Sum(Length("geom", spheroid=True)),   # mètres géodésiques
+    )
+    by_type = {r["surface_type"]: r for r in rows}
+
+    def _km(r):
+        m = r.get("meters") if r else None
+        # Length renvoie un Distance ou un float selon le backend — on
+        # normalise en km.
+        if m is None:
+            return 0.0
+        return round((m.m if hasattr(m, "m") else float(m)) / 1000, 1)
+
+    known = dict(RoadSegment.SURFACE_CHOICES)
+    types = []
+    for code, label in RoadSegment.SURFACE_CHOICES:
+        r = by_type.pop(code, None)
+        types.append({
+            "code":  code,
+            "label": label,
+            "count": r["n"] if r else 0,
+            "km":    _km(r),
+        })
+    for code, r in sorted(by_type.items()):          # classifications inconnues
+        types.append({
+            "code":  code or "inconnu",
+            "label": code or "Non classé",
+            "count": r["n"],
+            "km":    _km(r),
+        })
+
+    return JsonResponse({
+        "total_count": sum(t["count"] for t in types),
+        "total_km":    round(sum(t["km"] for t in types), 1),
+        "types":       types,
+        "scope":       admin_obj.name if admin_obj else "Réseau complet",
+    })
 
 
 # ── API — Stats zone ───────────────────────────────────────────────────────────
@@ -850,7 +925,7 @@ def api_zone_stats(request, zone_code):
 # ── API — Google Earth Engine ──────────────────────────────────────────────────
 
 from .gee_integration import (
-    get_contour_tiles,
+    get_contour_vectors,
     get_flood_extent,
     get_gee_basemap,
     get_ndvi_stats,
@@ -904,26 +979,51 @@ def api_gee_elevation(request):
 @require_GET
 def api_gee_contours(request):
     """
-    Tuiles de courbes de niveau (MNT Copernicus GLO-30) pour l'emprise active.
+    Courbes de niveau VECTORIELLES (cotes altimétriques incluses) pour
+    l'emprise visible de la carte.
 
-    GET /api/gee/contours/?admin=<level>:<code>   (sinon bbox Côte d'Ivoire)
-        &interval=<m>                              (défaut 5 m, bornes 2-50)
+    GET /api/gee/contours/?bbox=<w>,<s>,<e>,<n>&interval=<m>
+        bbox     : emprise visible (degrés WGS84), obligatoire
+        interval : équidistance en mètres (défaut 10, bornes 2-100)
+
+    Renvoie un FeatureCollection de LineString {"elev", "major"}.
+    L'emprise est limitée (~0.8°) : au-delà, le frontend doit zoomer —
+    comme sur toute carte topographique, les courbes sont un détail local.
     """
-    geom_geojson, scope = _resolve_gee_geom(request)
+    import math as _math
+
+    raw = (request.GET.get("bbox") or "").split(",")
     try:
-        interval = max(2, min(50, int(request.GET.get("interval", 5))))
+        w, s, e, n = (float(p) for p in raw)
     except (TypeError, ValueError):
-        interval = 5
+        return JsonResponse({"error": "bbox=w,s,e,n requis"}, status=400)
+    if not (-180 <= w < e <= 180 and -90 <= s < n <= 90):
+        return JsonResponse({"error": "bbox invalide"}, status=400)
+    if (e - w) > 0.8 or (n - s) > 0.8:
+        return JsonResponse({"no_data": True, "too_large": True})
 
     try:
-        data = get_contour_tiles(geom_geojson, interval=interval)
+        interval = max(2, min(100, int(request.GET.get("interval", 10))))
+    except (TypeError, ValueError):
+        interval = 10
+
+    # Emprise étendue au centième de degré EXTÉRIEUR : deux navigations
+    # voisines partagent la même clé de cache (le calcul est coûteux).
+    bbox = {
+        "west":  _math.floor(w * 100) / 100,
+        "south": _math.floor(s * 100) / 100,
+        "east":  _math.ceil(e * 100) / 100,
+        "north": _math.ceil(n * 100) / 100,
+    }
+
+    try:
+        data = get_contour_vectors(bbox, interval=interval)
     except Exception as exc:
-        logger.error("[GEE Contours] Erreur inattendue (%s) : %s", scope, exc)
+        logger.error("[GEE Contours] Erreur inattendue : %s", exc)
         return JsonResponse({"error": f"Erreur GEE : {str(exc)}"}, status=500)
 
     if data is None:
-        return JsonResponse({"no_data": True, "tiles_url": None, "scope": scope})
-    data["scope"] = scope
+        return JsonResponse({"no_data": True})
     return JsonResponse(data)
 
 

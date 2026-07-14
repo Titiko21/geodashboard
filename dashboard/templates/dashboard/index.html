@@ -190,7 +190,8 @@
             <div class="ml-row" data-legend="heat" style="display:none"><div class="ml-line" style="background:linear-gradient(90deg,#3b82f6,#22c55e,#eab308,#ef4444);height:8px;border-radius:4px"></div>Concentration d'inondations (faible → forte)</div>
             <div class="ml-row" data-legend="ndvi" style="display:none"><div class="ml-line" style="background:linear-gradient(90deg,#d73027,#fee08b,#1a9850);height:8px;border-radius:4px"></div>Végétation (rare → dense)</div>
             <div class="ml-row" data-legend="sar" style="display:none"><div class="ml-poly" style="background:#3b82f6"></div>Eau détectée par radar (15 derniers jours)</div>
-            <div class="ml-row" data-legend="contours" style="display:none"><div class="ml-line" style="background:#8b6b4a"></div>Courbe de niveau (5 m · maîtresse 25 m)</div>
+            <div class="ml-row" data-legend="contours" style="display:none"><div class="ml-line" style="background:#8b6b4a"></div>Courbe de niveau — <span id="legendContourIv">cote en mètres</span></div>
+            <div class="ml-row" data-legend-roads style="display:none"><div class="ml-line" style="background:linear-gradient(90deg,#334155,#d97706,#92400e);height:4px;border-radius:2px"></div>Routes (couleur = type de surface)</div>
             <div class="ml-row" data-legend="relief" style="display:none"><div class="ml-poly" style="background:linear-gradient(135deg,#e2e8f0,#64748b)"></div>Relief ombré (creux et crêtes)</div>
             <div class="ml-row"><div class="ml-line" style="background:#64748b"></div>Limite de commune</div>
             <div class="ml-row" style="color:var(--ink-3)"><span style="font-size:13px">🖱</span>Clic droit : altitude du point</div>
@@ -244,6 +245,7 @@
         <div class="rp-tabs" role="tablist">
             <button type="button" class="on" data-rp-tab="overview">Vue</button>
             <button type="button" data-rp-tab="flood">Inondation</button>
+            <button type="button" data-rp-tab="roads">Routes</button>
             <button type="button" data-rp-tab="degradations">Dégradations</button>
         </div>
 
@@ -424,6 +426,35 @@
                 </div>
             </div>
             {% endif %}
+        </div>
+
+        <!-- Tab : Routes — inventaire dynamique du réseau par type de surface.
+             Les lignes de filtres sont générées par JS depuis
+             /api/roads/inventory/ : l'interface reflète les classifications
+             réellement présentes en base (import BDR à venir). -->
+        <div class="rp-panel" data-rp-content="roads">
+            <div class="rp-card">
+                <div class="rp-card-head">
+                    <div style="min-width:0;flex:1">
+                        <h4>Inventaire des routes</h4>
+                        <small id="roadsInvScope">Chargement…</small>
+                    </div>
+                    <span class="rp-pill" id="roadsInvTotal">—</span>
+                </div>
+                <div id="roadsInvEmpty" style="display:none;text-align:center;padding:22px 10px;color:var(--ink-3)">
+                    <div style="font-size:26px;margin-bottom:8px">🛣</div>
+                    <div style="font-size:12.5px;line-height:1.6">
+                        Aucune route en base pour cette emprise.<br>
+                        L'inventaire s'alimentera automatiquement à l'import
+                        du réseau routier (BDR).
+                    </div>
+                </div>
+                <div id="roadsInvList" style="display:flex;flex-direction:column"></div>
+                <div id="roadsInvHint" style="display:none;font-size:11px;color:var(--ink-3);margin-top:10px">
+                    Cochez un type pour l'afficher sur la carte.
+                    Kilométrages calculés sur le tracé réel (PostGIS).
+                </div>
+            </div>
         </div>
 
         <!-- Tab : Dégradations (réseau routier) — rubrique préparée pour les
@@ -630,6 +661,7 @@
         initAdminTree();
         initTreeSearch();
         loadLandUseBreakdown();
+        loadRoadInventory();
     });
 </script>
 

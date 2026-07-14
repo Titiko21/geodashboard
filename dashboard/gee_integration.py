@@ -457,51 +457,62 @@ def get_point_elevation(lat, lng):
         return None
 
 
-# ─── Courbes de niveau — Copernicus GLO-30 ───────────────────────────────────
+# ─── Courbes de niveau vectorielles — Copernicus GLO-30 ─────────────────────
+#
+# v2 : isolignes VECTORIELLES étiquetables, en remplacement des tuiles raster
+# (illisibles : « vers » bruités, et impossibles à coter). On échantillonne le
+# MNT en grille sur l'emprise visible, puis dashboard/_contours.py en extrait
+# des polylignes par marching squares — chaque courbe porte sa cote exacte,
+# que le frontend affiche (standard topographique).
 
-@gee_cached("contours_v1", ttl=60 * 60 * 24 * 7)
-def get_contour_tiles(geom_or_bbox, interval=5):
+@gee_cached("contour_vec_v1", ttl=60 * 60 * 24 * 7)
+def get_contour_vectors(bbox, interval=10):
     """
-    Tuiles de courbes de niveau dérivées du MNT Copernicus GLO-30.
+    Courbes de niveau de l'emprise `bbox` ({"west","south","east","north"},
+    normalisée par la vue pour la stabilité du cache).
 
-    Technique « changement de classe » : on classe chaque pixel par tranche
-    d'altitude (floor(alt/intervalle)) et on ne garde que les pixels où la
-    classe change par rapport au voisinage → lignes fines et régulières,
-    y compris en terrain plat (le simple modulo y produirait des nappes).
-
-    Courbes fines tous les `interval` m (brun clair) + courbes maîtresses
-    tous les `interval*5` m (brun foncé, épaissies). Renvoie
-    {"tiles_url", "interval", "major_interval"} ou None.
+    Renvoie un FeatureCollection GeoJSON (LineString, propriétés
+    {"elev", "major"}) + {"interval", "major_interval"} ; None si GEE off.
     """
+    import math
+    from ._contours import contour_lines
+
     init_gee()
     if not _gee_initialized:
         return None
-    region = _to_ee_geometry(geom_or_bbox)
-    if region is None:
-        return None
-
     try:
+        region = ee.Geometry.Rectangle([
+            bbox["west"], bbox["south"], bbox["east"], bbox["north"],
+        ])
+        # Résolution adaptée à l'emprise : ~200 cellules sur la plus grande
+        # dimension (bon compromis lisibilité / temps de calcul), jamais plus
+        # fin que le MNT natif (30 m).
+        mid_lat = (bbox["south"] + bbox["north"]) / 2
+        width_m = (bbox["east"] - bbox["west"]) * 111_320 * math.cos(math.radians(mid_lat))
+        height_m = (bbox["north"] - bbox["south"]) * 110_540
+        scale = max(30, int(max(width_m, height_m) / 200))
+
         dem = (
             ee.ImageCollection("COPERNICUS/DEM/GLO30")
             .select("DEM").mosaic()
             .setDefaultProjection("EPSG:4326", None, 30)
+            .unmask(0)          # océan / lagunes → niveau mer
         )
-
-        def _edges(iv):
-            classed = dem.divide(iv).floor()
-            return classed.subtract(classed.focalMin(1)).gt(0)
-
-        minor = _edges(interval).selfMask().visualize(palette=["#b08968"])
-        major = (
-            _edges(interval * 5).focalMax(1).selfMask()
-            .visualize(palette=["#5c4030"])
+        grid = (
+            dem.reproject(crs="EPSG:4326", scale=scale)
+            .sampleRectangle(region=region, defaultValue=0)
+            .get("DEM").getInfo()
         )
-        combined = ee.ImageCollection([minor, major]).mosaic().clip(region)
-        tiles_url = combined.getMapId()["tile_fetcher"].url_format
+        # sampleRectangle renvoie la ligne 0 au NORD (vérifié empiriquement
+        # sur Attécoubé : collines au nord, lagune au sud) — la convention
+        # attendue par contour_lines.
+        features, effective_iv = contour_lines(grid, bbox, interval)
         return {
-            "tiles_url":      tiles_url,
-            "interval":       interval,
-            "major_interval": interval * 5,
+            "type":           "FeatureCollection",
+            "features":       features,
+            "interval":       effective_iv,
+            "major_interval": effective_iv * 5,
+            "scale_m":        scale,
         }
     except Exception as exc:
         logger.error("[GEE Contours] échec : %s", exc, exc_info=True)

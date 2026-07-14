@@ -15,8 +15,9 @@ urlpatterns = [
     path("api/alerts/<int:alert_id>/read/",     views.api_mark_alert_read, name="api_alert_read"),
     path("api/alerts/export/",                  views.api_alerts_export,  name="api_alerts_export"),
 
-    # API — Export routes GeoJSON
+    # API — Routes (export GeoJSON + inventaire par type de surface)
     path("api/roads/export/",                   views.api_roads_export,   name="api_roads_export"),
+    path("api/roads/inventory/",                views.api_roads_inventory, name="api_roads_inventory"),
 
     # API — Stats par zone
     path("api/zones/<str:zone_code>/stats/",    views.api_zone_stats,     name="api_zone_stats"),
