@@ -1,7 +1,8 @@
 /* ══════════════════════════════════════════════════════════
    GeoDash — dashboard.js
    Frontend aligné sur le backend actuel :
-     · fonds de carte (CartoDB / OSM / topo / satellite)
+     · fonds de carte (CartoDB / OSM / topo / satellite / GEE / relief)
+       — sélection dans Paramètres → Carte (plus de sélecteur sur la carte)
      · communes cliquables — choroplèthe susceptibilité inondation
        (/api/admin/divisions/?level=commune, propriétés flood_*)
      · overlays GEE live : NDVI Sentinel-2, SAR inondation
@@ -174,10 +175,6 @@ function _applyTileStyle(style) {
     _tileLayer.bringToBack();
     if (style === 'satellite') _addImageryLabels();
   }
-
-  document.querySelectorAll('[data-basemap]').forEach(function (b) {
-    b.classList.toggle('active', b.dataset.basemap === style);
-  });
 }
 
 function initMap(lat, lng, bounds) {
@@ -821,17 +818,9 @@ function initEventListeners() {
   var themeBtn = document.getElementById('themeToggle');
   if (themeBtn) themeBtn.addEventListener('click', toggleTheme);
 
-  // (Les couches d'analyse se gèrent dans Paramètres → Couches,
-  //  cf. initSettings — plus de chips sur la carte.)
-
-  // Fonds de carte
-  document.querySelectorAll('[data-basemap]').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      _settings.tile = this.dataset.basemap;
-      _applyTileStyle(_settings.tile);
-      _saveSettings();
-    });
-  });
+  // (Les couches d'analyse se gèrent dans Paramètres → Couches et le
+  //  fond de carte dans Paramètres → Carte — plus de sélecteur sur la
+  //  carte depuis le 2026-07-15.)
 
   // Plein écran
   var fsBtn = document.querySelector('[data-toggle-fullscreen]');
@@ -858,13 +847,17 @@ function initEventListeners() {
 
 function _loadSettings() {
   try {
-    // v2 : clé changée pour réappliquer le fond par défaut « Clair »
-    // (Voyager) aux utilisateurs dont l'ancien réglage pointait ailleurs.
+    // v3 : clé historique (bump v2→v3 lors d'anciens changements de
+    // défaut) ; les fonds retirés sont migrés plus bas, pas via la clé.
     var raw = localStorage.getItem('gd-settings-v3');
     if (raw) _settings = Object.assign({}, GD_SETTINGS_DEFAULT, JSON.parse(raw));
   } catch (e) { _settings = Object.assign({}, GD_SETTINGS_DEFAULT); }
   // Fusion fine des couches : les clés absentes reprennent leur défaut.
   _settings.layers = Object.assign({}, GD_SETTINGS_DEFAULT.layers, _settings.layers || {});
+  // Garde-fou : un fond persisté inconnu retombe sur le défaut.
+  if (!_TILE_DEFS[_settings.tile] && _settings.tile !== 'gee') {
+    _settings.tile = GD_SETTINGS_DEFAULT.tile;
+  }
   var savedTheme = null;
   try { savedTheme = localStorage.getItem('gd-theme'); } catch (e) {}
   if (savedTheme) _settings.theme = savedTheme;

@@ -502,7 +502,14 @@ def dashboard(request):
 
     # Panneau gauche : entités groupées par CATÉGORIE de type (Villes,
     # Communes, Districts, Régions, Départements, Sous-préfectures).
+    # Réorganisation 2026-07-15 : seuls les niveaux ALIMENTÉS forment des
+    # groupes ; les niveaux vides sont résumés en une note discrète
+    # (l'architecture 6 niveaux reste prête à les accueillir).
     admin_categories = _build_admin_categories(admin_filter_value)
+    admin_categories_filled = [c for c in admin_categories if c["count"]]
+    admin_levels_pending = " · ".join(
+        c["label"] for c in admin_categories if not c["count"]
+    )
     total_zones_count = Zone.objects.count()
 
     # Markers points (lat/lng) pour la couche commune cliquable de la carte.
@@ -543,7 +550,8 @@ def dashboard(request):
         "communes_count":      communes_count,
         "districts":           districts,
         "regions":             regions,
-        "admin_categories":    admin_categories,
+        "admin_categories":    admin_categories_filled,
+        "admin_levels_pending": admin_levels_pending,
         "total_zones_count":   total_zones_count,
         "admin_filter_value":  admin_filter_value,
         "admin_label":         admin_label,

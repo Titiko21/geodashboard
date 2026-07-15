@@ -108,22 +108,19 @@
     </aside>
 
     <!-- ═══════ LEFT PANEL ═══════════════════════════════════ -->
-    <aside class="left-panel" aria-label="Explorateur des communes">
+    <aside class="left-panel" aria-label="Explorateur territorial">
         <div class="panel-head">
             <h3>Explorateur</h3>
-            <div class="tabs" role="tablist">
-                <button type="button" class="on" data-lp-tab="zones" role="tab">Communes</button>
-            </div>
+            <span class="panel-sub">Découpage territorial</span>
         </div>
 
         <div class="panel-search">
             <svg width="13" height="13" aria-hidden="true"><use href="#i-search"></use></svg>
-            <input type="search" id="treeSearch" placeholder="Filtrer les communes…" aria-label="Filtrer les communes">
+            <input type="search" id="treeSearch" placeholder="Filtrer les subdivisions…" aria-label="Filtrer les subdivisions">
         </div>
 
         <div class="panel-scroll">
 
-            <!-- Onglet Communes -->
             <div class="lp-panel" data-lp-content="zones">
                 <div class="tree">
                     <div class="tree-row tree-row-country">
@@ -131,9 +128,11 @@
                         <span class="tree-count">{{ communes_count }}</span>
                     </div>
                     {% comment %}
-                       Tous les niveaux territoriaux sont AFFICHÉS, même vides :
-                       l'architecture accueille les futures données (quartiers,
-                       dégradations par niveau…) sans refonte de l'interface.
+                       Réorganisation 2026-07-15 : l'explorateur ne montre que
+                       les niveaux territoriaux ALIMENTÉS (groupes dépliables) ;
+                       les niveaux encore vides sont résumés en une seule note
+                       discrète en pied d'arbre. L'architecture 6 niveaux reste
+                       prête à les accueillir sans refonte.
                     {% endcomment %}
                     {% for cat in admin_categories %}
                         <div class="tree-row tree-row-district" data-tree-toggle>
@@ -150,11 +149,12 @@
                                 <span class="caret"></span>
                                 <span class="tree-label">{{ e.name }}</span>
                             </div>
-                            {% empty %}
-                            <div class="tree-empty">Aucune donnée pour l'instant — ce niveau sera alimenté prochainement.</div>
                             {% endfor %}
                         </div>
                     {% endfor %}
+                    {% if admin_levels_pending %}
+                    <div class="tree-pending">À venir&nbsp;: {{ admin_levels_pending }}</div>
+                    {% endif %}
                 </div>
             </div>
 
@@ -164,16 +164,11 @@
     <!-- ═══════ MAIN AREA — Carte ════════════════════════════ -->
     <div class="main-area">
 
-        <!-- Les couches d'analyse se gèrent dans Paramètres → Couches.
-             La carte reste nue ; la légende (dynamique) reflète l'affiché. -->
+        <!-- Les couches d'analyse se gèrent dans Paramètres → Couches,
+             le fond de carte dans Paramètres → Carte (sélecteur déplacé
+             hors de la carte le 2026-07-15 — ergonomie : ne pas gêner la
+             lecture). La carte reste nue ; la légende reflète l'affiché. -->
         <div class="map-tools">
-            <div class="tool-group" role="tablist" aria-label="Fond de carte">
-                <button type="button" class="tool" data-basemap="dark">Sombre</button>
-                <button type="button" class="tool active" data-basemap="light">Clair</button>
-                <button type="button" class="tool" data-basemap="osm">Plan</button>
-                <button type="button" class="tool" data-basemap="topo">Topo</button>
-                <button type="button" class="tool" data-basemap="satellite">Satellite</button>
-            </div>
             <button type="button" class="icon-tool" data-toggle-fullscreen aria-label="Plein écran" title="Plein écran">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="4 9 4 4 9 4"/><polyline points="20 9 20 4 15 4"/>
@@ -281,17 +276,9 @@
                     </div>
                     <span class="delta">niveau élevé ou critique</span>
                 </div>
-                <div class="rp-kpi">
-                    <small>% bâti</small>
-                    <div class="rp-kpi-val">
-                        {% if flood_profile.urban_pct %}
-                            <b style="color:var(--orange-1)">{{ flood_profile.urban_pct|floatformat:0 }}</b><span class="unit">%</span>
-                        {% else %}
-                            <b>—</b>
-                        {% endif %}
-                    </div>
-                    <span class="delta">imperméabilisation (Dynamic World)</span>
-                </div>
+                <!-- KPI « % bâti » (imperméabilisation Dynamic World) retiré
+                     le 2026-07-15 — hors périmètre actuel ; le facteur reste
+                     visible dans l'onglet Inondation (justification du score). -->
             </div>
 
             <div class="rp-card" id="landuseCard">
@@ -590,8 +577,8 @@
             </div>
             <div class="sd-tile-grid">
                 <div class="sd-tile-opt" data-tile="dark"><div class="sd-tile-preview dark-tiles"></div><div class="sd-tile-label">CartoDB Sombre</div></div>
-                <div class="sd-tile-opt active" data-tile="light"><div class="sd-tile-preview light-tiles"></div><div class="sd-tile-label">CartoDB Clair</div></div>
-                <div class="sd-tile-opt" data-tile="osm"><div class="sd-tile-preview osm-tiles"></div><div class="sd-tile-label">OpenStreetMap</div></div>
+                <div class="sd-tile-opt" data-tile="light"><div class="sd-tile-preview light-tiles"></div><div class="sd-tile-label">CartoDB Clair</div></div>
+                <div class="sd-tile-opt active" data-tile="osm"><div class="sd-tile-preview osm-tiles"></div><div class="sd-tile-label">OpenStreetMap</div></div>
                 <div class="sd-tile-opt" data-tile="topo"><div class="sd-tile-preview topo-tiles"></div><div class="sd-tile-label">Topographique</div></div>
                 <div class="sd-tile-opt" data-tile="satellite"><div class="sd-tile-preview satellite-tiles"></div><div class="sd-tile-label">Satellite (Esri)</div></div>
                 <div class="sd-tile-opt" data-tile="gee"><div class="sd-tile-preview gee-tiles"></div><div class="sd-tile-label">Satellite GEE · Sentinel-2</div></div>
