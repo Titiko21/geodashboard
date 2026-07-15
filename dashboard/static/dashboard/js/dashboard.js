@@ -861,6 +861,22 @@ function initEventListeners() {
   //  fond de carte dans Paramètres → Carte — plus de sélecteur sur la
   //  carte depuis le 2026-07-15.)
 
+  // Légende repliable : un clic sur le titre la réduit à une pastille
+  // (moins gênante pour la lecture de la carte). État mémorisé.
+  var legToggle = document.getElementById('legendToggle');
+  var legendEl = document.getElementById('mapLegend');
+  if (legToggle && legendEl) {
+    var collapsed = false;
+    try { collapsed = localStorage.getItem('gd-legend-collapsed') === '1'; } catch (e) {}
+    legendEl.classList.toggle('collapsed', collapsed);
+    legToggle.setAttribute('aria-expanded', String(!collapsed));
+    legToggle.addEventListener('click', function () {
+      var now = legendEl.classList.toggle('collapsed');
+      legToggle.setAttribute('aria-expanded', String(!now));
+      try { localStorage.setItem('gd-legend-collapsed', now ? '1' : '0'); } catch (e) {}
+    });
+  }
+
   // Plein écran
   var fsBtn = document.querySelector('[data-toggle-fullscreen]');
   if (fsBtn) fsBtn.addEventListener('click', function () {

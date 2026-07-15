@@ -282,12 +282,21 @@ body.dark .map-coords{background:rgba(19,28,58,.92);color:#cbd2eb}
 /* Légende carte (en bas-gauche, overlay sur la carte) */
 .map-legend{
   position:absolute;bottom:14px;left:14px;z-index:400;
-  background:rgba(255,255,255,.96);backdrop-filter:blur(10px);
-  border:1px solid var(--line);border-radius:12px;padding:12px 14px;width:260px;
-  box-shadow:var(--shadow);
+  background:rgba(255,255,255,.92);backdrop-filter:blur(10px);
+  border:1px solid var(--line);border-radius:12px;padding:10px 12px;width:230px;
+  max-width:calc(100vw - 28px);box-shadow:var(--shadow);
 }
-.map-legend .ml-ttl{font-size:11px;font-weight:800;color:var(--ink);
+.map-legend .ml-ttl{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  width:100%;background:none;border:0;cursor:pointer;
+  font-size:11px;font-weight:800;color:var(--ink);
   letter-spacing:.04em;text-transform:uppercase;margin-bottom:8px}
+.map-legend .ml-caret{color:var(--ink-3);flex-shrink:0;transition:transform .18s}
+/* État replié : ne reste que le titre-pastille, la carte est dégagée. */
+.map-legend.collapsed{width:auto;padding-bottom:10px}
+.map-legend.collapsed .ml-ttl{margin-bottom:0}
+.map-legend.collapsed .ml-caret{transform:rotate(-90deg)}
+.map-legend.collapsed .ml-body{display:none}
 .map-legend .ml-row{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--ink-2);padding:3px 0}
 .map-legend .ml-line{width:18px;height:3px;border-radius:2px;flex-shrink:0}
 .map-legend .ml-poly{width:14px;height:10px;border-radius:3px;flex-shrink:0;opacity:.7}

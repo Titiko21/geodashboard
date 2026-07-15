@@ -180,7 +180,13 @@
         <!-- Légende DYNAMIQUE : chaque ligne n'apparaît que si sa couche
              est affichée (Paramètres → Couches). -->
         <div class="map-legend" id="mapLegend">
-            <div class="ml-ttl">Légende</div>
+            <!-- Titre = bouton repliable (clic → réduit la légende pour
+                 dégager la carte ; état mémorisé côté navigateur). -->
+            <button class="ml-ttl" id="legendToggle" type="button" aria-expanded="true" aria-controls="legendBody" title="Réduire / déployer la légende">
+                <span>Légende</span>
+                <svg class="ml-caret" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div class="ml-body" id="legendBody">
             <!-- Choroplèthe susceptibilité : lecture principale de la carte,
                  toujours visible (couleurs alignées sur FLOOD_COLORS / scoring). -->
             <div class="ml-row" style="font-weight:700;padding-bottom:1px">Susceptibilité inondation (commune)</div>
@@ -200,6 +206,7 @@
             <div class="ml-row" data-legend="arcgisContours" style="display:none"><div class="ml-line" style="background:#a16207"></div>Courbes de niveau (ArcGIS)</div>
             <div class="ml-row"><span style="display:inline-block;width:14px;height:10px;border-radius:3px;border:2px solid #0f172a;background:transparent"></span>Commune sélectionnée</div>
             <div class="ml-row" style="color:var(--ink-3)"><span style="font-size:13px">🖱</span>Clic droit : altitude du point</div>
+            </div>
         </div>
 
         <div class="map-coords" id="mapCoords" aria-hidden="true">
