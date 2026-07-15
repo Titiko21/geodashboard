@@ -5,7 +5,7 @@
        — sélection dans Paramètres → Carte (plus de sélecteur sur la carte)
      · communes cliquables — choroplèthe susceptibilité inondation
        (/api/admin/divisions/?level=commune, propriétés flood_*)
-     · overlays GEE live : NDVI Sentinel-2, SAR inondation
+     · couches : choroplèthe (désactivable), relevés, relief, courbes
      · occupation des sols (Dynamic World, /api/gee/landuse/)
      · clic commune → navigation ?admin=commune:CODE
        (les panneaux sont rendus côté serveur)
@@ -14,7 +14,6 @@
 let map = null;
 let _mapReady = false;
 let _tileLayer = null;
-let _geeLayers = {};    // overlays tuiles GEE actifs (ndvi/sar)
 let lHillshade = null;  // relief ombré (Esri World Hillshade)
 let lZones = null;      // L.geoJSON des communes cliquables
 
@@ -33,11 +32,11 @@ const GD_SETTINGS_DEFAULT = {
   zoom: 11,
   showScale: true,
   showLegend: true,
-  // Couches d'analyse (Paramètres → Couches). Par défaut : seuls les
-  // relevés observés — la carte reste sobre.
+  // Couches d'analyse (Paramètres → Couches). Par défaut : choroplèthe de
+  // susceptibilité + relevés observés — la carte reste sobre.
   // NB : courbes de niveau GEE (GLO-30 validé le 14/07) réexposées le
-  // 2026-07-15 à la demande produit — MNT fiable sans dépendance ArcGIS.
-  layers: { events: true, heat: false, ndvi: false, sar: false, relief: false, contours: false },
+  // 2026-07-15 ; overlays GEE live (ndvi/sar) retirés le même jour.
+  layers: { choropleth: true, events: true, heat: false, relief: false, contours: false },
 };
 let _settings = Object.assign({}, GD_SETTINGS_DEFAULT);
 
@@ -209,21 +208,21 @@ function initMap(lat, lng, bounds) {
 /* Bascule effective de chaque couche (les fonctions _toggle* inversent
    l'état courant ; l'état désiré vit dans _settings.layers). */
 const LAYER_TOGGLES = {
-  events:   function () { _toggleFloodEvents(null); },
-  heat:     function () { _toggleFloodHeat(null); },
-  ndvi:     function () { _toggleGeeOverlay('ndvi', null); },
-  sar:      function () { _toggleGeeOverlay('sar', null); },
-  relief:   function () { _toggleRelief(null); },
-  contours: function () { _toggleContours(); },
+  choropleth: function () { _toggleChoropleth(); },
+  events:     function () { _toggleFloodEvents(null); },
+  heat:       function () { _toggleFloodHeat(null); },
+  relief:     function () { _toggleRelief(null); },
+  contours:   function () { _toggleContours(); },
 };
 
 /* État effectif d'une couche sur la carte. */
 function _layerActive(name) {
+  if (name === 'choropleth') return _choroOn;
   if (name === 'events') return !!lFloodEvents;
   if (name === 'heat') return !!lFloodHeat;
   if (name === 'relief') return !!lHillshade;
   if (name === 'contours') return _contoursOn;
-  return !!_geeLayers[name];
+  return false;
 }
 
 /* Aligne les couches réelles sur _settings.layers (après Réinitialiser). */
@@ -318,14 +317,28 @@ function _currentAdminValue() {
    susceptibilité inondation (vert → rouge). C'est la lecture directe
    « zones présumées inondables à l'échelle communale ». Contour blanc fin
    pour séparer les communes ; la commune sélectionnée passe en contour
-   sombre épais. */
+   sombre épais.
+   Désactivable (Paramètres → Couches → « Coloration des communes ») :
+   les communes redeviennent de simples contours gris cliquables. */
 const FLOOD_LEVEL_LABELS = {
   faible: 'faible', modere: 'modéré', eleve: 'élevé', critique: 'critique',
 };
 
+let _choroOn = false;   // état effectif ; le défaut (ON) vient de _settings.layers
+
 function _zoneStyle(props) {
   var sel = _currentAdminValue();
   var isSel = sel === 'commune:' + props.code;
+  if (!_choroOn) {
+    // Coloration désactivée : contours neutres, léger fill pour rester cliquable.
+    return {
+      color:       isSel ? '#dc2626' : '#64748b',
+      weight:      isSel ? 2.2 : 1.1,
+      opacity:     isSel ? 0.85 : 0.5,
+      fillColor:   '#64748b',
+      fillOpacity: isSel ? 0.04 : 0.02,
+    };
+  }
   // Niveau inconnu (score non calculé) → gris neutre, pas de fausse couleur.
   var fill = FLOOD_COLORS[props.flood_level] || '#94a3b8';
   return {
@@ -335,6 +348,13 @@ function _zoneStyle(props) {
     fillColor:   fill,
     fillOpacity: isSel ? 0.80 : 0.55,
   };
+}
+
+function _toggleChoropleth() {
+  _choroOn = !_choroOn;
+  if (lZones) {
+    lZones.setStyle(function (f) { return _zoneStyle(f.properties); });
+  }
 }
 
 function _zoneTooltip(p) {
@@ -364,7 +384,9 @@ function _loadCommunes() {
             permanent: true, direction: 'center',
             className: 'commune-label', interactive: false,
           });
-          layer.on('mouseover', function () { layer.setStyle({ weight: 2, fillOpacity: 0.74 }); });
+          layer.on('mouseover', function () {
+            layer.setStyle({ weight: 2, fillOpacity: _choroOn ? 0.74 : 0.15 });
+          });
           layer.on('mouseout', function () { layer.setStyle(_zoneStyle(p)); });
           layer.on('click', function (e) {
             L.DomEvent.stop(e);
@@ -507,46 +529,10 @@ function _toggleFloodHeat(chip) {
 }
 
 
-/* ══════ Overlays GEE (NDVI · SAR) ═════════════════════════ */
-
-const GEE_OVERLAY_DEFS = {
-  ndvi: { url: '/api/gee/ndvi/',  opacity: 0.62, empty: 'NDVI indisponible sur cette emprise' },
-  sar:  { url: '/api/gee/flood/', opacity: 0.70, empty: 'Pas de détection SAR récente' },
-};
-
-function _geeQuery() {
-  return window.location.search || '';
-}
-
-function _toggleGeeOverlay(name, chip) {
-  var def = GEE_OVERLAY_DEFS[name];
-  if (!def || !map) return;
-
-  if (_geeLayers[name]) {
-    map.removeLayer(_geeLayers[name]);
-    delete _geeLayers[name];
-    if (chip) chip.classList.remove('on');
-    return;
-  }
-
-  if (chip) chip.classList.add('loading');
-  _fetchJSON(def.url + _geeQuery())
-    .then(function (data) {
-      if (chip) chip.classList.remove('loading');
-      if (!data || !data.tiles_url) {
-        toast(def.empty, 'warn');
-        return;
-      }
-      _geeLayers[name] = L.tileLayer(data.tiles_url, { opacity: def.opacity, maxZoom: 20 }).addTo(map);
-      if (chip) chip.classList.add('on');
-    })
-    .catch(function (err) {
-      if (chip) chip.classList.remove('loading');
-      if (err === 'session') return;
-      console.warn('[GEE ' + name + '] échec :', err);
-      toast('Service GEE indisponible', 'err');
-    });
-}
+/* NB : les overlays GEE « live » (NDVI, eau radar SAR) ont été retirés de
+   l'UI le 2026-07-15 (décision produit — recentrage sur l'inondation).
+   Les endpoints /api/gee/ndvi/ et /api/gee/flood/ restent en place pour
+   une réexposition future. */
 
 
 /* ══════ Relief ombré (hillshade — lisibilité du terrain) ══ */

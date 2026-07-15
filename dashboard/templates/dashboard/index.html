@@ -187,20 +187,21 @@
                 <svg class="ml-caret" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
             </button>
             <div class="ml-body" id="legendBody">
-            <!-- Choroplèthe susceptibilité : lecture principale de la carte,
-                 toujours visible (couleurs alignées sur FLOOD_COLORS / scoring). -->
-            <div class="ml-row" style="font-weight:700;padding-bottom:1px">Susceptibilité inondation (commune)</div>
-            <div class="ml-row" style="flex-wrap:wrap;gap:9px;padding-top:1px">
-                <span style="display:inline-flex;align-items:center;gap:4px"><i style="width:12px;height:12px;border-radius:3px;background:#22c55e"></i>faible</span>
-                <span style="display:inline-flex;align-items:center;gap:4px"><i style="width:12px;height:12px;border-radius:3px;background:#eab308"></i>modéré</span>
-                <span style="display:inline-flex;align-items:center;gap:4px"><i style="width:12px;height:12px;border-radius:3px;background:#f97316"></i>élevé</span>
-                <span style="display:inline-flex;align-items:center;gap:4px"><i style="width:12px;height:12px;border-radius:3px;background:#dc2626"></i>critique</span>
+            <!-- Choroplèthe susceptibilité (couleurs alignées sur
+                 FLOOD_COLORS / scoring) — masquée si la coloration des
+                 communes est désactivée (Paramètres → Couches). -->
+            <div data-legend="choropleth">
+                <div class="ml-row" style="font-weight:700;padding-bottom:1px">Susceptibilité inondation (commune)</div>
+                <div class="ml-row" style="flex-wrap:wrap;gap:9px;padding-top:1px">
+                    <span style="display:inline-flex;align-items:center;gap:4px"><i style="width:12px;height:12px;border-radius:3px;background:#22c55e"></i>faible</span>
+                    <span style="display:inline-flex;align-items:center;gap:4px"><i style="width:12px;height:12px;border-radius:3px;background:#eab308"></i>modéré</span>
+                    <span style="display:inline-flex;align-items:center;gap:4px"><i style="width:12px;height:12px;border-radius:3px;background:#f97316"></i>élevé</span>
+                    <span style="display:inline-flex;align-items:center;gap:4px"><i style="width:12px;height:12px;border-radius:3px;background:#dc2626"></i>critique</span>
+                </div>
+                <div class="ml-sep"></div>
             </div>
-            <div class="ml-sep"></div>
             <div class="ml-row" data-legend="events"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#e11d48;border:2px solid #fff;box-shadow:0 0 0 1px #94a3b8"></span>Inondation observée (relevé terrain)</div>
             <div class="ml-row" data-legend="heat" style="display:none"><div class="ml-line" style="background:linear-gradient(90deg,#3b82f6,#22c55e,#eab308,#ef4444);height:8px;border-radius:4px"></div>Concentration d'inondations (faible → forte)</div>
-            <div class="ml-row" data-legend="ndvi" style="display:none"><div class="ml-line" style="background:linear-gradient(90deg,#d73027,#fee08b,#1a9850);height:8px;border-radius:4px"></div>Végétation (rare → dense)</div>
-            <div class="ml-row" data-legend="sar" style="display:none"><div class="ml-poly" style="background:#3b82f6"></div>Eau détectée par radar (15 derniers jours)</div>
             <div class="ml-row" data-legend-roads style="display:none"><div class="ml-line" style="background:linear-gradient(90deg,#334155,#d97706,#92400e);height:4px;border-radius:2px"></div>Routes (couleur = type de surface)</div>
             <div class="ml-row" data-legend="relief" style="display:none"><div class="ml-poly" style="background:linear-gradient(135deg,#e2e8f0,#64748b)"></div>Relief ombré (creux et crêtes)</div>
             <div class="ml-row" data-legend="contours" style="display:none"><div class="ml-line" style="background:#8b6b4a"></div>Courbe de niveau — <span id="legendContourIv">cote en mètres</span></div>
@@ -542,6 +543,13 @@
                 <div class="sd-section-title">Inondations</div>
                 <div class="sd-row">
                     <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Coloration des communes</div>
+                        <div class="sd-row-lbl-hint">Remplissage selon la susceptibilité inondation (vert → rouge). Désactivé : simples contours gris.</div>
+                    </div>
+                    <label class="sd-toggle"><input type="checkbox" id="layer-choropleth"><span class="sd-toggle-track"></span></label>
+                </div>
+                <div class="sd-row">
+                    <div class="sd-row-lbl">
                         <div class="sd-row-lbl-main">Inondations observées</div>
                         <div class="sd-row-lbl-hint">Relevés terrain géolocalisés (points rouges cliquables)</div>
                     </div>
@@ -555,23 +563,9 @@
                     <label class="sd-toggle"><input type="checkbox" id="layer-heat"><span class="sd-toggle-track"></span></label>
                 </div>
             </div>
-            <div class="sd-section sd-mt">
-                <div class="sd-section-title">Analyse satellite (en direct)</div>
-                <div class="sd-row">
-                    <div class="sd-row-lbl">
-                        <div class="sd-row-lbl-main">Végétation</div>
-                        <div class="sd-row-lbl-hint">Densité du couvert végétal actuel (indice NDVI)</div>
-                    </div>
-                    <label class="sd-toggle"><input type="checkbox" id="layer-ndvi"><span class="sd-toggle-track"></span></label>
-                </div>
-                <div class="sd-row">
-                    <div class="sd-row-lbl">
-                        <div class="sd-row-lbl-main">Eau détectée par radar</div>
-                        <div class="sd-row-lbl-hint">Surfaces en eau des 15 derniers jours (radar, voit à travers les nuages)</div>
-                    </div>
-                    <label class="sd-toggle"><input type="checkbox" id="layer-sar"><span class="sd-toggle-track"></span></label>
-                </div>
-            </div>
+            <!-- Section « Analyse satellite (en direct) » (NDVI, eau radar)
+                 retirée le 2026-07-15 — recentrage sur l'inondation ; les
+                 endpoints /api/gee/ndvi/ et /api/gee/flood/ restent servis. -->
             <div class="sd-section sd-mt">
                 <div class="sd-section-title">Terrain</div>
                 <div class="sd-row">
