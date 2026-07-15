@@ -31,6 +31,10 @@ urlpatterns = [
     path("api/gee/elevation/",                  views.api_gee_elevation,  name="api_gee_elevation"),
     path("api/gee/basemap/",                    views.api_gee_basemap,    name="api_gee_basemap"),
 
+    # API — Courbes de niveau ArcGIS (proxy sécurisé, jeton côté serveur)
+    path("api/arcgis/contours/<int:z>/<int:x>/<int:y>.png",
+                                                views.api_arcgis_contours, name="api_arcgis_contours"),
+
     # API — Découpage administratif (Phase B)
     path("api/admin/divisions/",                views.api_admin_divisions, name="api_admin_divisions"),
 ]

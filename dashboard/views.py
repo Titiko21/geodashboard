@@ -12,6 +12,9 @@ Patch GEE appliqué :
 import csv
 import json
 import logging
+import urllib.request
+from urllib.parse import urlencode
+from django.conf       import settings
 from django.shortcuts  import render, get_object_or_404
 from django.http       import JsonResponse, HttpResponse
 from django.views.decorators.http import require_GET
@@ -1039,6 +1042,74 @@ def api_gee_contours(request):
     if data is None:
         return JsonResponse({"no_data": True})
     return JsonResponse(data)
+
+
+# ── Courbes de niveau ArcGIS (proxy sécurisé) ──────────────────────────────
+# Couche premium Living Atlas « World Contour » (Esri). Elle EXIGE un jeton
+# ArcGIS et CONSOMME DES CRÉDITS à chaque tuile. Le jeton (settings.ARCGIS_TOKEN,
+# lu depuis .env) reste STRICTEMENT côté serveur : le navigateur n'appelle que
+# ce proxy, jamais elevation.arcgis.com — le secret ne fuite pas dans le réseau
+# du client. URL du service surchargeable via .env (ARCGIS_CONTOUR_SERVICE) au
+# cas où l'organisation pointe une autre couche de courbes.
+_WEBMERC_R = 20037508.342789244   # demi-circonférence Web Mercator (m)
+
+
+def _xyz_to_3857_bbox(z, x, y):
+    """Emprise EPSG:3857 (xmin,ymin,xmax,ymax) d'une tuile XYZ."""
+    n = 2 ** z
+    tile = 2 * _WEBMERC_R / n
+    xmin = -_WEBMERC_R + x * tile
+    ymax = _WEBMERC_R - y * tile
+    return xmin, ymax - tile, xmin + tile, ymax
+
+
+@require_GET
+def api_arcgis_contours(request, z, x, y):
+    """
+    Proxy de tuiles pour les courbes de niveau ArcGIS (couche abonnés Esri).
+
+    GET /api/arcgis/contours/<z>/<x>/<y>.png
+
+    503 si ARCGIS_TOKEN n'est pas configuré (le frontend prévient alors
+    l'utilisateur) ; 502 si ArcGIS renvoie une erreur (jeton expiré/invalide,
+    crédits épuisés — Esri répond alors un JSON en HTTP 200, qu'on filtre).
+    """
+    token = getattr(settings, "ARCGIS_TOKEN", "") or ""
+    if not token:
+        return HttpResponse("ARCGIS_TOKEN absent", status=503)
+
+    service = getattr(settings, "ARCGIS_CONTOUR_SERVICE", "") or (
+        "https://elevation.arcgis.com/arcgis/rest/services/"
+        "WorldElevation/Contour/MapServer/export"
+    )
+    xmin, ymin, xmax, ymax = _xyz_to_3857_bbox(int(z), int(x), int(y))
+    url = service + "?" + urlencode({
+        "bbox":        f"{xmin},{ymin},{xmax},{ymax}",
+        "bboxSR":      3857,
+        "imageSR":     3857,
+        "size":        "256,256",
+        "format":      "png32",
+        "transparent": "true",
+        "f":           "image",
+        "token":       token,
+    })
+    try:
+        with urllib.request.urlopen(url, timeout=15) as up:
+            ctype = up.headers.get("Content-Type", "")
+            body = up.read()
+    except Exception as exc:
+        logger.warning("[ArcGIS contours] échec tuile %s/%s/%s : %s", z, x, y, exc)
+        return HttpResponse(status=502)
+
+    # Jeton invalide / crédits épuisés → Esri renvoie un JSON (HTTP 200).
+    # On le traite comme un échec, pas comme une image cassée.
+    if "image" not in ctype:
+        logger.warning("[ArcGIS contours] réponse non-image (%s) — jeton ?", ctype)
+        return HttpResponse(status=502)
+
+    resp = HttpResponse(body, content_type=ctype)
+    resp["Cache-Control"] = "public, max-age=86400"   # courbes statiques → 24 h
+    return resp
 
 
 @require_GET

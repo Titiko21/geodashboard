@@ -38,7 +38,7 @@ const GD_SETTINGS_DEFAULT = {
   // NB : les courbes de niveau ont été retirées de l'UI le 2026-07-14
   // (décision produit) ; le service backend /api/gee/contours/ reste
   // disponible et validé pour une réexposition future.
-  layers: { events: true, heat: false, ndvi: false, sar: false, relief: false },
+  layers: { events: true, heat: false, ndvi: false, sar: false, relief: false, arcgisContours: false },
 };
 let _settings = Object.assign({}, GD_SETTINGS_DEFAULT);
 
@@ -215,6 +215,7 @@ const LAYER_TOGGLES = {
   ndvi:   function () { _toggleGeeOverlay('ndvi', null); },
   sar:    function () { _toggleGeeOverlay('sar', null); },
   relief: function () { _toggleRelief(null); },
+  arcgisContours: function () { _toggleArcgisContours(); },
 };
 
 /* État effectif d'une couche sur la carte. */
@@ -222,6 +223,7 @@ function _layerActive(name) {
   if (name === 'events') return !!lFloodEvents;
   if (name === 'heat') return !!lFloodHeat;
   if (name === 'relief') return !!lHillshade;
+  if (name === 'arcgisContours') return !!lArcgisContours;
   return !!_geeLayers[name];
 }
 
@@ -313,25 +315,35 @@ function _currentAdminValue() {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
-/* Communes = simples CONTOURS (pas de remplissage : la carte reste lisible
-   et les points d'inondation ressortent). Un léger fill quasi invisible
-   garde l'intérieur cliquable. */
+/* Choroplèthe : chaque commune est REMPLIE selon son niveau de
+   susceptibilité inondation (vert → rouge). C'est la lecture directe
+   « zones présumées inondables à l'échelle communale ». Contour blanc fin
+   pour séparer les communes ; la commune sélectionnée passe en contour
+   sombre épais. */
+const FLOOD_LEVEL_LABELS = {
+  faible: 'faible', modere: 'modéré', eleve: 'élevé', critique: 'critique',
+};
+
 function _zoneStyle(props) {
   var sel = _currentAdminValue();
   var isSel = sel === 'commune:' + props.code;
+  // Niveau inconnu (score non calculé) → gris neutre, pas de fausse couleur.
+  var fill = FLOOD_COLORS[props.flood_level] || '#94a3b8';
   return {
-    color:       isSel ? '#dc2626' : '#64748b',
-    weight:      isSel ? 2.2 : 1.1,
-    opacity:     isSel ? 0.85 : 0.5,
-    fillColor:   '#64748b',
-    fillOpacity: isSel ? 0.04 : 0.02,
+    color:       isSel ? '#0f172a' : '#ffffff',
+    weight:      isSel ? 2.6 : 0.8,
+    opacity:     isSel ? 1 : 0.9,
+    fillColor:   fill,
+    fillOpacity: isSel ? 0.80 : 0.55,
   };
 }
 
 function _zoneTooltip(p) {
   var s = '<b>' + p.name + '</b>';
   if (p.flood_susceptibility != null) {
-    s += '<br>Susceptibilité inondation : <b>' + p.flood_susceptibility + '/100</b>';
+    var lvl = FLOOD_LEVEL_LABELS[p.flood_level] || '';
+    s += '<br>Susceptibilité inondation : <b>' + p.flood_susceptibility + '/100</b>'
+       + (lvl ? ' (' + lvl + ')' : '');
   }
   return s;
 }
@@ -353,7 +365,7 @@ function _loadCommunes() {
             permanent: true, direction: 'center',
             className: 'commune-label', interactive: false,
           });
-          layer.on('mouseover', function () { layer.setStyle({ weight: 3, fillOpacity: 0.42 }); });
+          layer.on('mouseover', function () { layer.setStyle({ weight: 2, fillOpacity: 0.74 }); });
           layer.on('mouseout', function () { layer.setStyle(_zoneStyle(p)); });
           layer.on('click', function (e) {
             L.DomEvent.stop(e);
@@ -553,6 +565,33 @@ function _toggleRelief(chip) {
     { opacity: 0.45, maxZoom: 16 }
   ).addTo(map);
   if (chip) chip.classList.add('on');
+}
+
+
+/* ══════ Courbes de niveau ArcGIS (proxy backend) ══════════
+   Les tuiles viennent de /api/arcgis/contours/ : le backend ajoute le
+   jeton ArcGIS côté serveur (jamais exposé au navigateur) et relaie la
+   couche abonnés Esri. 503 = jeton absent, 502 = jeton invalide/crédits —
+   dans les deux cas on prévient l'utilisateur une seule fois. */
+let lArcgisContours = null;
+
+function _toggleArcgisContours() {
+  if (!map) return;
+  if (lArcgisContours) {
+    map.removeLayer(lArcgisContours);
+    lArcgisContours = null;
+    return;
+  }
+  var warned = false;
+  lArcgisContours = L.tileLayer('/api/arcgis/contours/{z}/{x}/{y}.png', {
+    opacity: 0.9, maxZoom: 19,
+  });
+  lArcgisContours.on('tileerror', function () {
+    if (warned) return;
+    warned = true;
+    toast('Courbes ArcGIS indisponibles — vérifie ARCGIS_TOKEN (.env) puis redémarre', 'warn');
+  });
+  lArcgisContours.addTo(map);
 }
 
 

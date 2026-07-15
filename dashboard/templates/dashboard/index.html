@@ -181,13 +181,24 @@
              est affichée (Paramètres → Couches). -->
         <div class="map-legend" id="mapLegend">
             <div class="ml-ttl">Légende</div>
+            <!-- Choroplèthe susceptibilité : lecture principale de la carte,
+                 toujours visible (couleurs alignées sur FLOOD_COLORS / scoring). -->
+            <div class="ml-row" style="font-weight:700;padding-bottom:1px">Susceptibilité inondation (commune)</div>
+            <div class="ml-row" style="flex-wrap:wrap;gap:9px;padding-top:1px">
+                <span style="display:inline-flex;align-items:center;gap:4px"><i style="width:12px;height:12px;border-radius:3px;background:#22c55e"></i>faible</span>
+                <span style="display:inline-flex;align-items:center;gap:4px"><i style="width:12px;height:12px;border-radius:3px;background:#eab308"></i>modéré</span>
+                <span style="display:inline-flex;align-items:center;gap:4px"><i style="width:12px;height:12px;border-radius:3px;background:#f97316"></i>élevé</span>
+                <span style="display:inline-flex;align-items:center;gap:4px"><i style="width:12px;height:12px;border-radius:3px;background:#dc2626"></i>critique</span>
+            </div>
+            <div class="ml-sep"></div>
             <div class="ml-row" data-legend="events"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#e11d48;border:2px solid #fff;box-shadow:0 0 0 1px #94a3b8"></span>Inondation observée (relevé terrain)</div>
             <div class="ml-row" data-legend="heat" style="display:none"><div class="ml-line" style="background:linear-gradient(90deg,#3b82f6,#22c55e,#eab308,#ef4444);height:8px;border-radius:4px"></div>Concentration d'inondations (faible → forte)</div>
             <div class="ml-row" data-legend="ndvi" style="display:none"><div class="ml-line" style="background:linear-gradient(90deg,#d73027,#fee08b,#1a9850);height:8px;border-radius:4px"></div>Végétation (rare → dense)</div>
             <div class="ml-row" data-legend="sar" style="display:none"><div class="ml-poly" style="background:#3b82f6"></div>Eau détectée par radar (15 derniers jours)</div>
             <div class="ml-row" data-legend-roads style="display:none"><div class="ml-line" style="background:linear-gradient(90deg,#334155,#d97706,#92400e);height:4px;border-radius:2px"></div>Routes (couleur = type de surface)</div>
             <div class="ml-row" data-legend="relief" style="display:none"><div class="ml-poly" style="background:linear-gradient(135deg,#e2e8f0,#64748b)"></div>Relief ombré (creux et crêtes)</div>
-            <div class="ml-row"><div class="ml-line" style="background:#64748b"></div>Limite de commune</div>
+            <div class="ml-row" data-legend="arcgisContours" style="display:none"><div class="ml-line" style="background:#a16207"></div>Courbes de niveau (ArcGIS)</div>
+            <div class="ml-row"><span style="display:inline-block;width:14px;height:10px;border-radius:3px;border:2px solid #0f172a;background:transparent"></span>Commune sélectionnée</div>
             <div class="ml-row" style="color:var(--ink-3)"><span style="font-size:13px">🖱</span>Clic droit : altitude du point</div>
         </div>
 
@@ -562,6 +573,13 @@
                         <div class="sd-row-lbl-hint">Met en évidence les creux (accumulation d'eau) et les crêtes</div>
                     </div>
                     <label class="sd-toggle"><input type="checkbox" id="layer-relief"><span class="sd-toggle-track"></span></label>
+                </div>
+                <div class="sd-row">
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Courbes de niveau (ArcGIS)</div>
+                        <div class="sd-row-lbl-hint">Isolignes d'altitude — source Esri Living Atlas. Nécessite un jeton ArcGIS (consomme des crédits).</div>
+                    </div>
+                    <label class="sd-toggle"><input type="checkbox" id="layer-arcgisContours"><span class="sd-toggle-track"></span></label>
                 </div>
                 <div class="sd-row">
                     <div class="sd-row-lbl">
