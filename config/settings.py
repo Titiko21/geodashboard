@@ -175,15 +175,6 @@ GEE_SERVICE_ACCOUNT = os.environ.get('GEE_SERVICE_ACCOUNT', '')
 GEE_KEY_FILE        = os.environ.get('GEE_KEY_FILE', '')
 GEE_PROJECT         = os.environ.get('GEE_PROJECT', '')
 
-# ── ArcGIS Online (optionnel) ─────────────────────────────────────────────────
-# Jeton pour les couches abonnés Esri (ex. courbes de niveau Living Atlas).
-# Secret → à mettre dans .env, jamais commité. Absent = fonctionnalité OFF
-# (le proxy renvoie 503, le frontend le signale). Préférer une clé API durable
-# à un token de session (qui expire en ~1-2 h). ARCGIS_CONTOUR_SERVICE permet
-# de pointer une autre couche de courbes que le défaut World Contour.
-ARCGIS_TOKEN            = os.environ.get('ARCGIS_TOKEN', '')
-ARCGIS_CONTOUR_SERVICE  = os.environ.get('ARCGIS_CONTOUR_SERVICE', '')
-
 # ── Logging ───────────────────────────────────────────────────────────────────
 # En développement  : tout s'affiche dans la console, niveau DEBUG.
 # En production     : les erreurs sont écrites dans logs/geodash.log,

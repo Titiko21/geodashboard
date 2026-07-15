@@ -35,10 +35,9 @@ const GD_SETTINGS_DEFAULT = {
   showLegend: true,
   // Couches d'analyse (Paramètres → Couches). Par défaut : seuls les
   // relevés observés — la carte reste sobre.
-  // NB : les courbes de niveau ont été retirées de l'UI le 2026-07-14
-  // (décision produit) ; le service backend /api/gee/contours/ reste
-  // disponible et validé pour une réexposition future.
-  layers: { events: true, heat: false, ndvi: false, sar: false, relief: false, arcgisContours: false },
+  // NB : courbes de niveau GEE (GLO-30 validé le 14/07) réexposées le
+  // 2026-07-15 à la demande produit — MNT fiable sans dépendance ArcGIS.
+  layers: { events: true, heat: false, ndvi: false, sar: false, relief: false, contours: false },
 };
 let _settings = Object.assign({}, GD_SETTINGS_DEFAULT);
 
@@ -210,12 +209,12 @@ function initMap(lat, lng, bounds) {
 /* Bascule effective de chaque couche (les fonctions _toggle* inversent
    l'état courant ; l'état désiré vit dans _settings.layers). */
 const LAYER_TOGGLES = {
-  events: function () { _toggleFloodEvents(null); },
-  heat:   function () { _toggleFloodHeat(null); },
-  ndvi:   function () { _toggleGeeOverlay('ndvi', null); },
-  sar:    function () { _toggleGeeOverlay('sar', null); },
-  relief: function () { _toggleRelief(null); },
-  arcgisContours: function () { _toggleArcgisContours(); },
+  events:   function () { _toggleFloodEvents(null); },
+  heat:     function () { _toggleFloodHeat(null); },
+  ndvi:     function () { _toggleGeeOverlay('ndvi', null); },
+  sar:      function () { _toggleGeeOverlay('sar', null); },
+  relief:   function () { _toggleRelief(null); },
+  contours: function () { _toggleContours(); },
 };
 
 /* État effectif d'une couche sur la carte. */
@@ -223,7 +222,7 @@ function _layerActive(name) {
   if (name === 'events') return !!lFloodEvents;
   if (name === 'heat') return !!lFloodHeat;
   if (name === 'relief') return !!lHillshade;
-  if (name === 'arcgisContours') return !!lArcgisContours;
+  if (name === 'contours') return _contoursOn;
   return !!_geeLayers[name];
 }
 
@@ -568,30 +567,117 @@ function _toggleRelief(chip) {
 }
 
 
-/* ══════ Courbes de niveau ArcGIS (proxy backend) ══════════
-   Les tuiles viennent de /api/arcgis/contours/ : le backend ajoute le
-   jeton ArcGIS côté serveur (jamais exposé au navigateur) et relaie la
-   couche abonnés Esri. 503 = jeton absent, 502 = jeton invalide/crédits —
-   dans les deux cas on prévient l'utilisateur une seule fois. */
-let lArcgisContours = null;
+/* ══════ Courbes de niveau vectorielles (cotes altimétriques) ══
 
-function _toggleArcgisContours() {
+   MNT Copernicus GLO-30 via GEE (/api/gee/contours/) — VALIDÉ le
+   14/07/2026 : croisé avec SRTM, NASADEM et FABDEM (écarts < 7 m),
+   aéroport FHB mesuré 6 m vs 6,4 m officiels. Réexposé le 15/07/2026
+   (demande produit) en remplacement de la couche ArcGIS à jeton.
+
+   Standard topographique : isolignes fines tous les `interval` m,
+   MAÎTRESSES épaissies portant leur COTE (altitude / niveau mer).
+   Recalculées sur l'emprise visible à chaque déplacement (comme
+   toute carte topo, c'est un détail local) ; équidistance adaptée
+   au zoom : 20 m (vue large) → 10 m → 5 m (vue rapprochée). */
+
+let lContours = null;          // layerGroup : lignes + étiquettes de cote
+let _contoursOn = false;
+let _contoursSeq = 0;          // anti-course entre déplacements successifs
+let _contoursMoveBound = false;
+let _contoursHintShown = false;
+
+const CONTOUR_MIN_ZOOM = 11;
+
+function _contourInterval(zoom) {
+  if (zoom >= 15) return 5;
+  if (zoom >= 13) return 10;
+  return 20;
+}
+
+function _clearContours() {
+  if (lContours && map) { map.removeLayer(lContours); }
+  lContours = null;
+}
+
+function _toggleContours() {
   if (!map) return;
-  if (lArcgisContours) {
-    map.removeLayer(lArcgisContours);
-    lArcgisContours = null;
+  _contoursOn = !_contoursOn;
+  if (!_contoursOn) { _clearContours(); return; }
+  if (!_contoursMoveBound) {
+    _contoursMoveBound = true;
+    map.on('moveend', function () { if (_contoursOn) _refreshContours(); });
+  }
+  _refreshContours();
+}
+
+function _refreshContours() {
+  if (!map || !_contoursOn) return;
+  var zoom = map.getZoom();
+  if (zoom < CONTOUR_MIN_ZOOM) {
+    _clearContours();
+    if (!_contoursHintShown) {
+      _contoursHintShown = true;
+      toast('Zoomez pour afficher les courbes de niveau', 'warn');
+    }
     return;
   }
-  var warned = false;
-  lArcgisContours = L.tileLayer('/api/arcgis/contours/{z}/{x}/{y}.png', {
-    opacity: 0.9, maxZoom: 19,
+  var seq = ++_contoursSeq;
+  var b = map.getBounds();
+  var bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]
+    .map(function (v) { return v.toFixed(4); }).join(',');
+  _fetchJSON('/api/gee/contours/?bbox=' + bbox + '&interval=' + _contourInterval(zoom))
+    .then(function (d) {
+      if (seq !== _contoursSeq || !_contoursOn) return;   // vue déjà changée
+      if (!d || d.no_data || !d.features) {
+        toast('Courbes de niveau indisponibles ici', 'warn');
+        return;
+      }
+      _renderContours(d);
+    })
+    .catch(function (err) {
+      if (err === 'session') return;
+      console.warn('[Contours] échec :', err);
+      toast('Courbes de niveau indisponibles', 'err');
+    });
+}
+
+function _renderContours(fc) {
+  _clearContours();
+  var iv = fc.interval || 10;
+  var legendIv = document.getElementById('legendContourIv');
+  if (legendIv) {
+    legendIv.textContent = 'équidistance ' + iv + ' m · cote sur les maîtresses';
+  }
+  var labels = [];
+  var lines = L.geoJSON(fc, {
+    interactive: false,
+    style: function (f) {
+      var major = f.properties && f.properties.major;
+      return {
+        color:   major ? '#5c4030' : '#a5825f',
+        weight:  major ? 1.8 : 1.0,
+        opacity: major ? 0.9 : 0.65,
+      };
+    },
+    onEachFeature: function (f, layer) {
+      // Cote altimétrique posée au milieu de chaque courbe MAÎTRESSE —
+      // lisible sans surcharger (les fines s'interpolent visuellement).
+      if (!f.properties || !f.properties.major) return;
+      var coords = f.geometry && f.geometry.coordinates;
+      if (!coords || coords.length < 6 || labels.length >= 60) return;
+      var mid = coords[Math.floor(coords.length / 2)];
+      labels.push(L.marker([mid[1], mid[0]], {
+        interactive: false,
+        keyboard: false,
+        icon: L.divIcon({
+          className: 'contour-label',
+          html: '<span>' + f.properties.elev + ' m</span>',
+          iconSize: null,
+        }),
+      }));
+    },
   });
-  lArcgisContours.on('tileerror', function () {
-    if (warned) return;
-    warned = true;
-    toast('Courbes ArcGIS indisponibles — vérifie ARCGIS_TOKEN (.env) puis redémarre', 'warn');
-  });
-  lArcgisContours.addTo(map);
+  lContours = L.layerGroup([lines].concat(labels)).addTo(map);
 }
 
 

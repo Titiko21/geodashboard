@@ -33,6 +33,13 @@ Nettoyage : `docker rm -f gds-verify` + supprimer les fichiers env.
 
 - `--entrypoint python` obligatoire : `entrypoint.sh` du worktree a des fins
   de ligne CRLF (checkout Windows) → `exec /app/entrypoint.sh: no such file`.
+- Ajouter `--dns 8.8.8.8 --dns 1.1.1.1` au `docker run` si le test touche GEE :
+  le compose définit ces DNS, sans eux la résolution `earthengine.googleapis.com`
+  échoue (« DNS résolution Google échouée » dans les logs).
+- Dans le pane navigateur, Leaflet peut s'initialiser avec une hauteur nulle
+  (bounds sud==nord → bbox dégénérée). Corriger via
+  `map.invalidateSize(); map.fire('moveend')` avant de tester les couches
+  dépendantes de l'emprise. N'arrive pas dans un vrai navigateur.
 - Ne PAS relancer migrate/import contre la DB partagée sauf si la branche
   contient des migrations (elle écrit dans la base du conteneur principal).
 - Sélection d'une commune : `/?admin=commune:CIV-COM-<NOM>` (ex.

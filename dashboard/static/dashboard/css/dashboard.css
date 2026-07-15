@@ -302,6 +302,16 @@ body.dark .map-coords{background:rgba(19,28,58,.92);color:#cbd2eb}
 .map-legend .ml-poly{width:14px;height:10px;border-radius:3px;flex-shrink:0;opacity:.7}
 .map-legend .ml-sep{height:1px;background:var(--line);margin:8px 0}
 
+/* Cote altimétrique posée sur les courbes de niveau maîtresses.
+   Halo blanc 4 directions : lisible sur tout fond, sans cartouche. */
+.contour-label{background:transparent;border:0;box-shadow:none}
+.contour-label span{
+  display:inline-block;transform:translate(-50%,-50%);
+  color:#5c4030;font-size:10px;font-weight:700;white-space:nowrap;
+  font-family:'JetBrains Mono',monospace;
+  text-shadow:-1px -1px 0 #fff,1px -1px 0 #fff,-1px 1px 0 #fff,1px 1px 0 #fff;
+}
+
 /* Overlay de chargement */
 .map-overlay{
   position:absolute;inset:0;z-index:500;background:rgba(246,244,238,.85);

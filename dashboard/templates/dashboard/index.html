@@ -203,7 +203,7 @@
             <div class="ml-row" data-legend="sar" style="display:none"><div class="ml-poly" style="background:#3b82f6"></div>Eau détectée par radar (15 derniers jours)</div>
             <div class="ml-row" data-legend-roads style="display:none"><div class="ml-line" style="background:linear-gradient(90deg,#334155,#d97706,#92400e);height:4px;border-radius:2px"></div>Routes (couleur = type de surface)</div>
             <div class="ml-row" data-legend="relief" style="display:none"><div class="ml-poly" style="background:linear-gradient(135deg,#e2e8f0,#64748b)"></div>Relief ombré (creux et crêtes)</div>
-            <div class="ml-row" data-legend="arcgisContours" style="display:none"><div class="ml-line" style="background:#a16207"></div>Courbes de niveau (ArcGIS)</div>
+            <div class="ml-row" data-legend="contours" style="display:none"><div class="ml-line" style="background:#8b6b4a"></div>Courbe de niveau — <span id="legendContourIv">cote en mètres</span></div>
             <div class="ml-row"><span style="display:inline-block;width:14px;height:10px;border-radius:3px;border:2px solid #0f172a;background:transparent"></span>Commune sélectionnée</div>
             <div class="ml-row" style="color:var(--ink-3)"><span style="font-size:13px">🖱</span>Clic droit : altitude du point</div>
             </div>
@@ -583,10 +583,10 @@
                 </div>
                 <div class="sd-row">
                     <div class="sd-row-lbl">
-                        <div class="sd-row-lbl-main">Courbes de niveau (ArcGIS)</div>
-                        <div class="sd-row-lbl-hint">Isolignes d'altitude — source Esri Living Atlas. Nécessite un jeton ArcGIS (consomme des crédits).</div>
+                        <div class="sd-row-lbl-main">Courbes de niveau</div>
+                        <div class="sd-row-lbl-hint">Isolignes d'altitude cotées — MNT Copernicus GLO-30 (30 m, ±4 m, validé le 14/07/2026). Visibles à partir du zoom 11.</div>
                     </div>
-                    <label class="sd-toggle"><input type="checkbox" id="layer-arcgisContours"><span class="sd-toggle-track"></span></label>
+                    <label class="sd-toggle"><input type="checkbox" id="layer-contours"><span class="sd-toggle-track"></span></label>
                 </div>
                 <div class="sd-row">
                     <div class="sd-row-lbl">
