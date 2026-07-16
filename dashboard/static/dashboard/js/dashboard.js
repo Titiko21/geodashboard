@@ -106,12 +106,16 @@ const _TILE_DEFS = {
     attribution: '&copy; OpenStreetMap', maxZoom: 19,
   },
   topo: {
-    url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
-    attribution: '&copy; OSM &copy; OpenTopoMap', maxZoom: 17,
+    // Esri World Topo (remplace OpenTopoMap le 2026-07-15 : cartographie
+    // datée en Afrique de l'Ouest, zoom bridé à 17, tuiles lentes).
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Tiles &copy; Esri', maxZoom: 19,
   },
   satellite: {
+    // maxNativeZoom + maxZoom : au-delà du zoom natif Esri, les tuiles
+    // sont agrandies au lieu de disparaître (sur-zoom propre).
     url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    attribution: 'Tiles &copy; Esri', maxZoom: 19,
+    attribution: 'Tiles &copy; Esri', maxNativeZoom: 19, maxZoom: 20,
   },
   relief: {
     // Relief ombré Esri en FOND (analyse topographique) — distinct de la
@@ -126,10 +130,12 @@ const _TILE_DEFS = {
 
 function _buildTileLayer(style) {
   var def = _TILE_DEFS[style] || _TILE_DEFS.light;
-  return L.tileLayer(def.url, {
+  var opts = {
     attribution: def.attribution, maxZoom: def.maxZoom, detectRetina: true,
     className: 'gd-basemap',   // léger assourdissement (cf. CSS)
-  });
+  };
+  if (def.maxNativeZoom) opts.maxNativeZoom = def.maxNativeZoom;
+  return L.tileLayer(def.url, opts);
 }
 
 let _labelsLayer = null;   // toponymie par-dessus les fonds imagerie (sans noms)
@@ -139,7 +145,7 @@ let _tileToken = 0;        // anti-course : seul le dernier choix de fond gagne
 function _addImageryLabels() {
   _labelsLayer = L.tileLayer(
     'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',
-    { maxZoom: 19, opacity: 0.95 }
+    { maxZoom: 20, opacity: 0.95 }
   ).addTo(map);
 }
 
