@@ -555,6 +555,37 @@ def get_gee_basemap():
         return None
 
 
+# ─── Zones basses intra-communes — MERIT Hydro (HAND) ────────────────────────
+#
+# Réponse cartographique à « où, dans la commune ? » : les surfaces situées
+# à moins de HAND_LOW_M au-dessus du drainage le plus proche — MÊME source
+# (MERIT Hydro `hnd`) et MÊME seuil que le facteur « bas-fonds » du score
+# inondation (flood/gee_factors.py). La carte montre OÙ se trouvent les
+# surfaces que le score compte. Résolution ~90 m : lecture de quartier,
+# pas de parcelle.
+
+@gee_cached("gee_lowzones_v1", ttl=60 * 60 * 24 * 7)   # terrain stable → 7 j
+def get_lowzones_tiles():
+    """
+    Tuiles des zones basses. Deux classes : 2,5–5 m (bleu clair) et
+    < 2,5 m (bleu foncé, accumulation quasi certaine).
+    Renvoie {"tiles_url"} ou None si GEE indisponible.
+    """
+    init_gee()
+    if not _gee_initialized:
+        return None
+    try:
+        hand = ee.Image("MERIT/Hydro/v1_0_1").select("hnd")
+        # 1 = zone basse (2,5–5 m), 2 = très basse (< 2,5 m) ; reste masqué.
+        classes = hand.lt(5).add(hand.lt(2.5)).selfMask()
+        viz = classes.visualize(min=1, max=2, palette=["#60a5fa", "#1d4ed8"])
+        url = viz.getMapId()["tile_fetcher"].url_format
+        return {"tiles_url": url}
+    except Exception as exc:
+        logger.error("[GEE Zones basses] échec : %s", exc, exc_info=True)
+        return None
+
+
 # ─── Road Surface Quality — Landsat 8 ────────────────────────────────────────
 
 @gee_cached("road_condition_v2")

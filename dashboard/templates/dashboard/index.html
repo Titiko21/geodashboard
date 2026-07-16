@@ -204,6 +204,7 @@
             </div>
             <div class="ml-row" data-legend="events"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#e11d48;border:2px solid #fff;box-shadow:0 0 0 1px #94a3b8"></span>Inondation observée (relevé terrain)</div>
             <div class="ml-row" data-legend="heat" style="display:none"><div class="ml-line" style="background:linear-gradient(90deg,#3b82f6,#22c55e,#eab308,#ef4444);height:8px;border-radius:4px"></div>Concentration d'inondations (faible → forte)</div>
+            <div class="ml-row" data-legend="lowzones" style="display:none"><div class="ml-poly" style="background:linear-gradient(135deg,#60a5fa,#1d4ed8)"></div>Zones basses : &lt; 5 m au-dessus du drainage (foncé : &lt; 2,5 m)</div>
             <div class="ml-row" data-legend-roads style="display:none"><div class="ml-line" style="background:linear-gradient(90deg,#334155,#d97706,#92400e);height:4px;border-radius:2px"></div>Routes (couleur = type de surface)</div>
             <div class="ml-row" data-legend="relief" style="display:none"><div class="ml-poly" style="background:linear-gradient(135deg,#e2e8f0,#64748b)"></div>Relief ombré (creux et crêtes)</div>
             <div class="ml-row" data-legend="contours" style="display:none"><div class="ml-line" style="background:#8b6b4a"></div>Courbe de niveau — <span id="legendContourIv">cote en mètres</span></div>
@@ -563,6 +564,13 @@
                         <div class="sd-row-lbl-hint">Halos colorés là où les relevés se concentrent</div>
                     </div>
                     <label class="sd-toggle"><input type="checkbox" id="layer-heat"><span class="sd-toggle-track"></span></label>
+                </div>
+                <div class="sd-row">
+                    <div class="sd-row-lbl">
+                        <div class="sd-row-lbl-main">Zones basses (bas-fonds)</div>
+                        <div class="sd-row-lbl-hint">Où, dans la commune ? Secteurs à moins de 5 m au-dessus du drainage (bleu foncé : moins de 2,5 m) — même seuil que le facteur « bas-fonds » du score. Précision ~90 m.</div>
+                    </div>
+                    <label class="sd-toggle"><input type="checkbox" id="layer-lowzones"><span class="sd-toggle-track"></span></label>
                 </div>
             </div>
             <!-- Section « Analyse satellite (en direct) » (NDVI, eau radar)

@@ -936,10 +936,29 @@ from .gee_integration import (
     get_contour_vectors,
     get_flood_extent,
     get_gee_basemap,
+    get_lowzones_tiles,
     get_ndvi_stats,
     get_point_elevation,
     get_road_surface_index,
 )
+
+
+@require_GET
+def api_gee_lowzones(request):
+    """
+    Tuiles des zones basses intra-communes (HAND < 5 m, MERIT Hydro) —
+    même source et même seuil que le facteur « bas-fonds » du score.
+
+    GET /api/gee/lowzones/  →  {"tiles_url": ...} | {"no_data": true}
+    """
+    try:
+        data = get_lowzones_tiles()
+    except Exception as exc:
+        logger.error("[GEE Zones basses] erreur inattendue : %s", exc)
+        return JsonResponse({"error": f"Erreur GEE : {str(exc)}"}, status=500)
+    if not data:
+        return JsonResponse({"no_data": True})
+    return JsonResponse(data)
 
 
 @require_GET

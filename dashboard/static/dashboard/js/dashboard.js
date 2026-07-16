@@ -36,7 +36,7 @@ const GD_SETTINGS_DEFAULT = {
   // susceptibilité + relevés observés — la carte reste sobre.
   // NB : courbes de niveau GEE (GLO-30 validé le 14/07) réexposées le
   // 2026-07-15 ; overlays GEE live (ndvi/sar) retirés le même jour.
-  layers: { choropleth: true, events: true, heat: false, relief: false, contours: false },
+  layers: { choropleth: true, events: true, heat: false, lowzones: false, relief: false, contours: false },
 };
 let _settings = Object.assign({}, GD_SETTINGS_DEFAULT);
 
@@ -224,6 +224,7 @@ const LAYER_TOGGLES = {
   choropleth: function () { _toggleChoropleth(); },
   events:     function () { _toggleFloodEvents(null); },
   heat:       function () { _toggleFloodHeat(null); },
+  lowzones:   function () { _toggleLowzones(); },
   relief:     function () { _toggleRelief(null); },
   contours:   function () { _toggleContours(); },
 };
@@ -233,6 +234,7 @@ function _layerActive(name) {
   if (name === 'choropleth') return _choroOn;
   if (name === 'events') return !!lFloodEvents;
   if (name === 'heat') return !!lFloodHeat;
+  if (name === 'lowzones') return !!lLowzones;
   if (name === 'relief') return !!lHillshade;
   if (name === 'contours') return _contoursOn;
   return false;
@@ -546,6 +548,37 @@ function _toggleFloodHeat(chip) {
    l'UI le 2026-07-15 (décision produit — recentrage sur l'inondation).
    Les endpoints /api/gee/ndvi/ et /api/gee/flood/ restent en place pour
    une réexposition future. */
+
+
+/* ══════ Zones basses intra-communes (HAND, MERIT Hydro) ═══
+   Répond à « où, dans la commune ? » : surfaces à moins de 5 m
+   au-dessus du drainage — même source et même seuil que le facteur
+   « bas-fonds » du score. Bleu clair : 2,5-5 m ; bleu foncé : < 2,5 m. */
+let lLowzones = null;
+
+function _toggleLowzones() {
+  if (!map) return;
+  if (lLowzones) {
+    map.removeLayer(lLowzones);
+    lLowzones = null;
+    return;
+  }
+  _fetchJSON('/api/gee/lowzones/')
+    .then(function (d) {
+      if (!d || d.no_data || !d.tiles_url) {
+        toast('Zones basses indisponibles (service satellite)', 'warn');
+        return;
+      }
+      // L'utilisateur a pu re-décocher pendant le chargement.
+      if (!_settings.layers || !_settings.layers.lowzones) return;
+      lLowzones = L.tileLayer(d.tiles_url, { opacity: 0.55, maxZoom: 20 }).addTo(map);
+    })
+    .catch(function (err) {
+      if (err === 'session') return;
+      console.warn('[Zones basses] échec :', err);
+      toast('Zones basses indisponibles', 'err');
+    });
+}
 
 
 /* ══════ Relief ombré (hillshade — lisibilité du terrain) ══ */
