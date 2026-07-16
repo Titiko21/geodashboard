@@ -87,14 +87,6 @@ svg{flex-shrink:0}
 .searchbar input::placeholder{color:var(--ink-3)}
 
 .top-actions{display:flex;align-items:center;gap:10px;justify-self:end}
-.live-badge{
-  display:inline-flex;align-items:center;gap:7px;
-  font-size:11.5px;font-weight:600;color:var(--ink-2);
-  background:var(--surface-2);padding:6px 10px;border-radius:999px;border:1px solid var(--line);
-}
-.pulse{width:7px;height:7px;border-radius:50%;background:#22c55e;
-  box-shadow:0 0 0 4px rgba(34,197,94,.15);animation:pulse 1.6s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
 
 .ico-btn{
   width:36px;height:36px;border-radius:9px;

@@ -76,10 +76,12 @@
         </div>
 
         <div class="top-actions">
-            <div class="live-badge" title="{% if gee_available %}Service Google Earth Engine actif{% else %}GEE indisponible — analyses satellite figées{% endif %}">
-                <span class="pulse" style="{% if not gee_available %}background:#94a3b8;box-shadow:0 0 0 4px rgba(148,163,184,.15);animation:none{% endif %}"></span>
-                {% if gee_available %}GEE · live{% else %}GEE off{% endif %}
-            </div>
+            {% comment %}
+               Badge d'état du service satellite retiré le 2026-07-16
+               (demande produit : indicateur technique inutile aux
+               utilisateurs). Le contexte gee_available reste fourni
+               par la vue si besoin futur.
+            {% endcomment %}
             <button type="button" class="theme-toggle" id="themeToggle" aria-label="Basculer le thème">
                 <svg class="th-sun" width="16" height="16" aria-hidden="true"><use href="#i-sun"></use></svg>
                 <svg class="th-moon" width="16" height="16" aria-hidden="true"><use href="#i-moon"></use></svg>
