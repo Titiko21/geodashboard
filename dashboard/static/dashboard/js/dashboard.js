@@ -105,6 +105,13 @@ const _TILE_DEFS = {
     url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
     attribution: '&copy; OpenStreetMap', maxZoom: 19,
   },
+  hot: {
+    // Style Humanitaire (HOT, rendu OSM France) — même donnée OSM vivante
+    // que « Plan », mais conçu pour les villes africaines : bâtiments,
+    // pistes et quartiers systématiquement dessinés (ajouté 2026-07-16).
+    url: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
+    attribution: '&copy; OpenStreetMap &middot; HOT', maxZoom: 20,
+  },
   topo: {
     // Esri World Topo (remplace OpenTopoMap le 2026-07-15 : cartographie
     // datée en Afrique de l'Ouest, zoom bridé à 17, tuiles lentes).

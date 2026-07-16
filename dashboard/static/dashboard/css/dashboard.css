@@ -479,6 +479,7 @@ body.dark .rp-pill{background:rgba(31,138,91,.18)}
 .sd-tile-preview.dark-tiles{background:linear-gradient(135deg,#1a1a2e,#0f3460)}
 .sd-tile-preview.light-tiles{background:linear-gradient(135deg,#f5f5f5,#e0e0e0)}
 .sd-tile-preview.osm-tiles{background:linear-gradient(135deg,#e8eddf,#c8d5b9)}
+.sd-tile-preview.hot-tiles{background:linear-gradient(135deg,#fdf3e3,#f0b78a)}
 .sd-tile-preview.topo-tiles{background:linear-gradient(135deg,#d4c5a0,#8b7355)}
 .sd-tile-preview.satellite-tiles{background:linear-gradient(135deg,#2d4a3e,#1a2e1f)}
 .sd-tile-preview.gee-tiles{background:linear-gradient(135deg,#1d3a2f,#3f6212 55%,#14532d)}
