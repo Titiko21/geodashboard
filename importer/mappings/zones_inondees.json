@@ -1,0 +1,8 @@
+{
+  "target": "flood_event",
+  "columns": {
+    "name":   ["NOM", "NOM_ZONE", "NAME", "LIBELLE", "LIB", "QUARTIER", "SITE"],
+    "date":   ["DATE", "DATE_OBS", "DATE_INOND", "DATE_RELEV", "OBSERVED_AT"],
+    "source": ["SOURCE", "ORIGINE", "AUTEUR", "OPERATEUR"]
+  }
+}

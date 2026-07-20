@@ -85,6 +85,7 @@ class ImportReport:
     created: int = 0
     updated: int = 0
     skipped: list = field(default_factory=list)  # [(label, raison), …]
+    written_keys: list = field(default_factory=list)  # clés réellement écrites
 
     @property
     def total_written(self):
@@ -159,12 +160,17 @@ def _feature_geos(feat):
 # ── Import ──────────────────────────────────────────────────────────────────
 
 def run_import(file_path, mapping_path, layer_name=None, dry_run=False,
-               log=lambda msg: None):
+               log=lambda msg: None, run_hooks=True):
     """
     Exécute (ou prévisualise) l'import d'un fichier géospatial.
 
     Renvoie un ImportReport. Lève ImporterError pour toute erreur de
     configuration (fichier, mapping, colonnes, cible).
+
+    `run_hooks` autorise le travail de suite déclaré par la cible
+    (`TargetSpec.after_import`). Le laisser à True en ligne de commande ;
+    le passer à False depuis une vue HTTP — ces crochets sont des
+    traitements par lot qui peuvent durer plusieurs minutes.
     """
     mapping = load_mapping(mapping_path)
     try:
@@ -258,6 +264,7 @@ def run_import(file_path, mapping_path, layer_name=None, dry_run=False,
         with transaction.atomic():
             for label, key, defaults in prepared:
                 _, created = Model.objects.update_or_create(**key, defaults=defaults)
+                report.written_keys.append(key[target.key_field])
                 if created:
                     report.created += 1
                     log(f"  + {label} ({key[target.key_field]})")
@@ -267,5 +274,12 @@ def run_import(file_path, mapping_path, layer_name=None, dry_run=False,
 
     for label, reason in report.skipped:
         log(f"  ! {label} — ignorée : {reason}")
+
+    # ── 3. Travail de suite déclaré par la cible ────────────────────────────
+    # Hors transaction (l'import est déjà acquis : un recalcul qui échoue ne
+    # doit pas annuler les données importées) et jamais en dry-run.
+    if run_hooks and not dry_run and report.written_keys and target.after_import:
+        log("")
+        target.after_import(report.written_keys, log)
 
     return report

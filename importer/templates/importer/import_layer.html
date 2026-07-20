@@ -29,6 +29,17 @@
         </ul>
       {% endif %}
     </div>
+    {% if pending_recompute %}
+      <div style="background:#fff3e0;border:1px solid #ffb74d;padding:12px 16px;border-radius:6px;margin-bottom:16px">
+        <b>⚠ Les scores de susceptibilité ne sont pas encore à jour.</b><br>
+        Ces relevés imposent un plancher au score des communes qu'ils
+        recoupent. Tant que le recalcul n'a pas tourné, la carte affiche des
+        points d'inondation que les scores communaux ignorent.<br>
+        Le recalcul interroge le satellite (~15 s par commune), trop long pour
+        cette page. Lancez-le en ligne de commande :
+        <pre style="background:#f5f5f5;padding:8px 10px;border-radius:4px;margin:8px 0 0;font-size:12px">docker compose exec web {{ pending_recompute }}</pre>
+      </div>
+    {% endif %}
     {% if log %}
       <details><summary>Journal détaillé ({{ log|length }} lignes)</summary>
         <pre style="background:#f5f5f5;padding:10px;border-radius:6px;font-size:12px;overflow:auto">{% for line in log %}{{ line }}

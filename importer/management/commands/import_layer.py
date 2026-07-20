@@ -43,6 +43,10 @@ class Command(BaseCommand):
                             help="Affiche couches et colonnes du fichier, puis quitte.")
         parser.add_argument("--dry-run", action="store_true",
                             help="Prévisualise sans écrire en base.")
+        parser.add_argument("--no-recompute", action="store_true",
+                            help="N'exécute pas le travail de suite de la cible "
+                                 "(ex. recalcul de la susceptibilité après un "
+                                 "import de relevés d'inondation).")
 
     def handle(self, *args, **options):
         try:
@@ -61,6 +65,7 @@ class Command(BaseCommand):
                 layer_name=options["layer"],
                 dry_run=options["dry_run"],
                 log=self.stdout.write,
+                run_hooks=not options["no_recompute"],
             )
         except ImporterError as exc:
             raise CommandError(str(exc))

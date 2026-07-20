@@ -26,6 +26,24 @@ def _shipped_mappings():
     return sorted(p.name for p in MAPPINGS_DIR.glob("*.json"))
 
 
+def _pending_recompute_hint(report):
+    """
+    Commande à lancer manuellement après un import fait depuis le navigateur.
+
+    Les crochets `after_import` sont désactivés ici (cf. run_hooks=False) :
+    ce sont des traitements par lot de plusieurs minutes, incompatibles avec
+    une requête HTTP. Plutôt que de laisser l'incohérence silencieuse — des
+    relevés visibles sur la carte que les scores ignorent — on affiche
+    explicitement le geste restant.
+    """
+    if report is None or report.dry_run or not report.written_keys:
+        return None
+    from flood.models import FloodEvent
+    if not FloodEvent.objects.filter(code__in=report.written_keys).exists():
+        return None
+    return "python manage.py update_flood_susceptibility"
+
+
 @staff_member_required
 def import_layer_view(request):
     ctx = {
@@ -85,9 +103,14 @@ def import_layer_view(request):
                     mapping_path=mapping_path,
                     dry_run=dry_run,
                     log=log_lines.append,
+                    # JAMAIS de travail de suite depuis une requête HTTP :
+                    # le recalcul de susceptibilité coûte ~15 s par commune
+                    # (mesuré le 2026-07-20) et ferait expirer la requête.
+                    run_hooks=False,
                 )
                 ctx["report"] = report
                 ctx["log"] = log_lines
+                ctx["pending_recompute"] = _pending_recompute_hint(report)
             except ImporterError as exc:
                 ctx["error"] = str(exc)
                 ctx["log"] = log_lines

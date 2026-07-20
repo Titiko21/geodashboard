@@ -34,6 +34,12 @@ class TargetSpec:
     build_key: Callable             # inputs dict -> {key_field: valeur}
     build_defaults: Callable        # inputs dict -> defaults du modèle
     accept: Optional[Callable] = None  # inputs dict -> (bool, raison)
+    # Travail de suite déclenché APRÈS une écriture réussie (jamais en
+    # dry-run). Signature : (written_keys: list, log: Callable) -> None.
+    # Réservé aux traitements par lot — le moteur ne l'appelle que si
+    # l'appelant l'autorise (`run_hooks`), car une passerelle HTTP ne peut
+    # pas se permettre plusieurs minutes de calcul.
+    after_import: Optional[Callable] = None
 
     def model(self):
         from django.apps import apps
@@ -88,6 +94,35 @@ def _event_code(inputs):
     return f"EVT-{slug}" + (f"-{date}" if date else "")
 
 
+def _recompute_after_events(written_keys, log):
+    """
+    Un relevé importé impose un PLANCHER au score de sa commune (scoring v3).
+    Sans ce recalcul, la carte afficherait des points d'inondation que les
+    scores communaux ignorent — deux lectures contradictoires à l'écran.
+
+    Recalcule les SEULES communes recoupant les relevés écrits : ~15 s
+    chacune contre ~3,5 min pour les 14 (mesuré le 2026-07-20).
+    """
+    from flood.models import FloodEvent
+    from flood.susceptibility import communes_intersecting, recompute_communes
+
+    geoms = list(
+        FloodEvent.objects.filter(code__in=written_keys)
+        .values_list("geom", flat=True)
+    )
+    communes = communes_intersecting(geoms)
+    if not communes.exists():
+        log("Aucune commune recoupée par ces relevés — scores inchangés.")
+        return
+
+    noms = ", ".join(communes.order_by("name").values_list("name", flat=True))
+    log(f"Recalcul de la susceptibilité — commune(s) concernée(s) : {noms}")
+    ok, failed = recompute_communes(communes, log=log)
+    log(f"{ok} commune(s) recalculée(s), {len(failed)} échec(s).")
+    if failed:
+        log("⚠ Échecs (scores inchangés, à relancer) : " + ", ".join(failed))
+
+
 register(TargetSpec(
     name="flood_event",
     app_model="flood.FloodEvent",
@@ -102,6 +137,7 @@ register(TargetSpec(
         "date":   _parse_event_date(inputs.get("date")),
         "source": inputs.get("source") or "",
     },
+    after_import=_recompute_after_events,
 ))
 
 
