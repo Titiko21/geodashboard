@@ -448,6 +448,7 @@ function _toggleChoropleth() {
   if (lZones) {
     lZones.setStyle(function (f) { return _zoneStyle(f.properties); });
   }
+  _updateLegend();   // comme les 5 autres bascules — la légende suit la carte
 }
 
 function _zoneTooltip(p) {
