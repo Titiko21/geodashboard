@@ -96,6 +96,13 @@ function toast(msg, type) {
    ⚠️ `detectRetina` n'est volontairement PAS activé (voir _buildTileLayer). */
 const _TILE_MAX_ZOOM = 20;
 
+/* Relief ombré Esri — servi À LA FOIS comme fond (`_TILE_DEFS.relief`) et
+   comme couche superposable (Paramètres → Couches → « Relief ombré »).
+   Une seule définition pour les deux usages. */
+const _HILLSHADE_URL =
+  'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}';
+const _HILLSHADE_MAX_NATIVE_ZOOM = 16;
+
 const _TILE_DEFS = {
   dark: {
     // `{r}` → CARTO sert nativement des tuiles @2x sur écran HiDPI.
@@ -133,8 +140,8 @@ const _TILE_DEFS = {
   relief: {
     // Relief ombré Esri en FOND (analyse topographique) — distinct de la
     // couche « Relief ombré » superposable des Paramètres → Couches.
-    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
-    attribution: 'Tiles &copy; Esri', maxNativeZoom: 16,
+    url: _HILLSHADE_URL,
+    attribution: 'Tiles &copy; Esri', maxNativeZoom: _HILLSHADE_MAX_NATIVE_ZOOM,
   },
   // 'gee' : fond Sentinel-2 servi par Google Earth Engine — asynchrone
   // (URL de tuiles obtenue via /api/gee/basemap/), géré à part dans
@@ -164,6 +171,39 @@ function _buildTileLayer(style) {
 let _labelsLayer = null;   // toponymie par-dessus les fonds imagerie (sans noms)
 let _tileToken = 0;        // anti-course : seul le dernier choix de fond gagne
 
+/* Fond de secours si le fournisseur choisi ne répond plus. CARTO : sans
+   jeton, CDN mondial — c'est le plus sûr des fonds du catalogue. */
+const _TILE_FALLBACK = 'light';
+
+/* Seuil volontairement BAS : le signal décisif est `loaded === 0`, pas le
+   nombre d'échecs. Un seuil élevé serait inatteignable sur fenêtre étroite —
+   une carte de 355×490 px ne demande que 6 tuiles, donc un seuil à 8 ne se
+   déclencherait jamais (constaté en test le 2026-07-20). */
+const _TILE_ERROR_LIMIT = 3;
+
+/* Surveille un fond et bascule sur le fond de secours s'il est HORS SERVICE.
+   Heuristique : un fournisseur vivant sert au moins une tuile. Dès qu'UNE
+   tuile a été chargée, les échecs suivants sont des trous ponctuels (bord
+   d'emprise, tuile manquante) et ne déclenchent plus rien. */
+function _guardTileLayer(layer, style, token) {
+  var loaded = 0, errors = 0;
+  layer.on('tileload', function () { loaded++; });
+  layer.on('tileerror', function () {
+    errors++;
+    if (loaded > 0 || errors < _TILE_ERROR_LIMIT) return;
+    if (token !== _tileToken) return;          // l'utilisateur a déjà changé de fond
+    layer.off('tileerror');                    // une seule bascule par couche
+    if (style === _TILE_FALLBACK) {
+      toast('Aucun fond de carte ne répond — vérifiez la connexion', 'err');
+      return;
+    }
+    toast('Fond de carte indisponible — bascule sur « Clair »', 'warn');
+    _settings.tile = _TILE_FALLBACK;
+    _saveSettings();
+    _applyTileStyle(_TILE_FALLBACK);
+  });
+}
+
 /* Étiquettes claires avec halo, conçues pour fonds sombres/imagerie. */
 function _addImageryLabels() {
   _labelsLayer = L.tileLayer(
@@ -187,6 +227,7 @@ function _applyTileStyle(style) {
           attribution: 'Sentinel-2 &copy; Copernicus · via Google Earth Engine',
           maxNativeZoom: 15, maxZoom: _TILE_MAX_ZOOM, className: 'gd-basemap',
         }).addTo(map);
+        _guardTileLayer(_tileLayer, 'gee', token);   // URL GEE expirée → repli
         _tileLayer.bringToBack();
         _addImageryLabels();
       })
@@ -199,10 +240,18 @@ function _applyTileStyle(style) {
       });
   } else {
     _tileLayer = _buildTileLayer(style).addTo(map);
+    _guardTileLayer(_tileLayer, style, token);
     _tileLayer.bringToBack();
     if (style === 'satellite') _addImageryLabels();
   }
 }
+
+/* Emprise de travail : Côte d'Ivoire (env. 4,2-10,8 °N / 8,6-2,5 °O) avec une
+   marge. Empêche de dériver hors du pays et de charger des tuiles pour rien.
+   Effet de bord utile : les suffixes « °N » / « °O » écrits en dur dans le
+   gabarit restent vrais partout où la carte peut aller. */
+const CI_BOUNDS = [[3.9, -8.9], [11.0, -2.2]];
+const CI_MIN_ZOOM = 7;   // ~pays entier à l'écran
 
 function initMap(lat, lng, bounds) {
   var el = document.getElementById('map');
@@ -213,6 +262,9 @@ function initMap(lat, lng, bounds) {
     zoom: _settings.zoom || 11,
     zoomControl: true,
     zoomSnap: 0.5,
+    minZoom: CI_MIN_ZOOM,
+    maxBounds: L.latLngBounds(CI_BOUNDS),
+    maxBoundsViscosity: 0.75,   // résistance élastique, pas un mur sec
   });
   _applyTileStyle(_settings.tile);   // gère aussi le fond GEE (asynchrone)
   if (_settings.showScale) L.control.scale({ imperial: false }).addTo(map);
@@ -245,14 +297,17 @@ const LAYER_TOGGLES = {
   contours:   function () { _toggleContours(); },
 };
 
-/* État effectif d'une couche sur la carte. */
+/* État effectif d'une couche sur la carte — ce qui est RÉELLEMENT dessiné,
+   pas ce que l'utilisateur a coché. Les deux divergent le temps d'un
+   chargement, et durablement si le service derrière la couche a échoué. */
 function _layerActive(name) {
   if (name === 'choropleth') return _choroOn;
   if (name === 'events') return !!lFloodEvents;
   if (name === 'heat') return !!lFloodHeat;
   if (name === 'lowzones') return !!lLowzones;
   if (name === 'relief') return !!lHillshade;
-  if (name === 'contours') return _contoursOn;
+  // `_contoursOn` = intention ; sous le zoom minimal rien n'est tracé.
+  if (name === 'contours') return _contoursOn && !!lContours;
   return false;
 }
 
@@ -266,19 +321,25 @@ function _syncLayers() {
   _updateLegend();
 }
 
-/* Légende dynamique : n'affiche que les lignes des couches actives. */
+/* Légende dynamique : n'affiche que les lignes des couches RÉELLEMENT
+   présentes sur la carte (`_layerActive`), et non celles simplement cochées
+   dans les réglages. Une couche dont le service a échoué disparaît donc de
+   la légende — le dashboard n'annonce jamais une donnée qu'il n'affiche pas.
+   À rappeler après chaque résolution de couche asynchrone. */
 function _updateLegend() {
-  var lyr = _settings.layers || {};
   document.querySelectorAll('#mapLegend [data-legend]').forEach(function (row) {
-    row.style.display = lyr[row.dataset.legend] ? '' : 'none';
+    row.style.display = _layerActive(row.dataset.legend) ? '' : 'none';
   });
 }
 
 /* Clic droit sur la carte → interroge le MNT au point exact :
    altitude (mer = 0) et hauteur au-dessus du drainage le plus proche.
    C'est l'information altimétrique EXPLOITABLE (pas juste des lignes). */
+let _probeSeq = 0;   // anti-course : seule la dernière sonde écrit dans le popup
+
 function _probeElevation(e) {
   var ll = e.latlng;
+  var seq = ++_probeSeq;
   var popup = L.popup({ maxWidth: 260 })
     .setLatLng(ll)
     .setContent('<b>Sonde altimétrique</b><br>Interrogation du MNT…')
@@ -286,6 +347,7 @@ function _probeElevation(e) {
 
   _fetchJSON('/api/gee/elevation/?lat=' + ll.lat.toFixed(5) + '&lng=' + ll.lng.toFixed(5))
     .then(function (d) {
+      if (seq !== _probeSeq) return;   // un point plus récent a été sondé
       if (!d || d.no_data || d.elevation_m == null) {
         popup.setContent('<b>Sonde altimétrique</b><br>Donnée indisponible ici.');
         return;
@@ -302,7 +364,7 @@ function _probeElevation(e) {
       popup.setContent(html);
     })
     .catch(function (err) {
-      if (err === 'session') return;
+      if (err === 'session' || seq !== _probeSeq) return;
       popup.setContent('<b>Sonde altimétrique</b><br>Service indisponible.');
     });
 }
@@ -481,6 +543,7 @@ function _toggleFloodEvents(chip) {
     map.removeLayer(lFloodEvents);
     lFloodEvents = null;
     if (chip) chip.classList.remove('on');
+    _updateLegend();
     return;
   }
   if (chip) chip.classList.add('loading');
@@ -512,9 +575,11 @@ function _toggleFloodEvents(chip) {
         },
       }).addTo(map);
       if (chip) chip.classList.add('on');
+      _updateLegend();
     })
     .catch(function (err) {
       if (chip) chip.classList.remove('loading');
+      _updateLegend();               // couche absente → ligne de légende retirée
       if (err === 'session') return;
       console.warn('[Zones inondées] échec :', err);
       toast('Zones inondées indisponibles', 'err');
@@ -530,6 +595,7 @@ function _toggleFloodHeat(chip) {
     map.removeLayer(lFloodHeat);
     lFloodHeat = null;
     if (chip) chip.classList.remove('on');
+    _updateLegend();
     return;
   }
   if (chip) chip.classList.add('loading');
@@ -550,9 +616,11 @@ function _toggleFloodHeat(chip) {
         gradient: { 0.25: '#3b82f6', 0.5: '#22c55e', 0.75: '#eab308', 1.0: '#ef4444' },
       }).addTo(map);
       if (chip) chip.classList.add('on');
+      _updateLegend();
     })
     .catch(function (err) {
       if (chip) chip.classList.remove('loading');
+      _updateLegend();
       if (err === 'session') return;
       console.warn('[Points chauds] échec :', err);
       toast('Points chauds indisponibles', 'err');
@@ -577,19 +645,23 @@ function _toggleLowzones() {
   if (lLowzones) {
     map.removeLayer(lLowzones);
     lLowzones = null;
+    _updateLegend();
     return;
   }
   _fetchJSON('/api/gee/lowzones/')
     .then(function (d) {
       if (!d || d.no_data || !d.tiles_url) {
         toast('Zones basses indisponibles (service satellite)', 'warn');
+        _updateLegend();
         return;
       }
       // L'utilisateur a pu re-décocher pendant le chargement.
       if (!_settings.layers || !_settings.layers.lowzones) return;
-      lLowzones = L.tileLayer(d.tiles_url, { opacity: 0.55, maxZoom: 20 }).addTo(map);
+      lLowzones = L.tileLayer(d.tiles_url, { opacity: 0.55, maxZoom: _TILE_MAX_ZOOM }).addTo(map);
+      _updateLegend();
     })
     .catch(function (err) {
+      _updateLegend();
       if (err === 'session') return;
       console.warn('[Zones basses] échec :', err);
       toast('Zones basses indisponibles', 'err');
@@ -605,13 +677,16 @@ function _toggleRelief(chip) {
     map.removeLayer(lHillshade);
     lHillshade = null;
     if (chip) chip.classList.remove('on');
+    _updateLegend();
     return;
   }
-  lHillshade = L.tileLayer(
-    'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
-    { opacity: 0.45, maxZoom: 16 }
-  ).addTo(map);
+  lHillshade = L.tileLayer(_HILLSHADE_URL, {
+    opacity: 0.45,
+    maxNativeZoom: _HILLSHADE_MAX_NATIVE_ZOOM,   // sur-zoom propre (pas de disparition)
+    maxZoom: _TILE_MAX_ZOOM,
+  }).addTo(map);
   if (chip) chip.classList.add('on');
+  _updateLegend();
 }
 
 
@@ -650,7 +725,7 @@ function _clearContours() {
 function _toggleContours() {
   if (!map) return;
   _contoursOn = !_contoursOn;
-  if (!_contoursOn) { _clearContours(); return; }
+  if (!_contoursOn) { _clearContours(); _updateLegend(); return; }
   if (!_contoursMoveBound) {
     _contoursMoveBound = true;
     map.on('moveend', function () { if (_contoursOn) _refreshContours(); });
@@ -663,6 +738,7 @@ function _refreshContours() {
   var zoom = map.getZoom();
   if (zoom < CONTOUR_MIN_ZOOM) {
     _clearContours();
+    _updateLegend();               // rien de tracé → la légende ne l'annonce plus
     if (!_contoursHintShown) {
       _contoursHintShown = true;
       toast('Zoomez pour afficher les courbes de niveau', 'warn');
@@ -678,11 +754,14 @@ function _refreshContours() {
       if (seq !== _contoursSeq || !_contoursOn) return;   // vue déjà changée
       if (!d || d.no_data || !d.features) {
         toast('Courbes de niveau indisponibles ici', 'warn');
+        _updateLegend();
         return;
       }
       _renderContours(d);
+      _updateLegend();
     })
     .catch(function (err) {
+      _updateLegend();
       if (err === 'session') return;
       console.warn('[Contours] échec :', err);
       toast('Courbes de niveau indisponibles', 'err');
