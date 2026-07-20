@@ -88,61 +88,77 @@ function toast(msg, type) {
 
 /* ══════ Carte ═════════════════════════════════════════════ */
 
+/* Plafond de zoom commun à tous les fonds. Chaque fond déclare en plus son
+   `maxNativeZoom` = dernier niveau réellement servi par le fournisseur :
+   au-delà, Leaflet agrandit la dernière tuile au lieu de la masquer (on ne
+   tombe jamais sur une carte blanche au sur-zoom).
+
+   ⚠️ `detectRetina` n'est volontairement PAS activé (voir _buildTileLayer). */
+const _TILE_MAX_ZOOM = 20;
+
 const _TILE_DEFS = {
   dark: {
+    // `{r}` → CARTO sert nativement des tuiles @2x sur écran HiDPI.
     url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-    attribution: '&copy; OSM &copy; CARTO', maxZoom: 20,
+    attribution: '&copy; OSM &copy; CARTO', maxNativeZoom: 20,
   },
   light: {
     // Voyager : plus lisible que Positron (relief doux, labels nets) →
     // meilleure mise en valeur des couches d'analyse par-dessus.
     url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-    attribution: '&copy; OSM &copy; CARTO', maxZoom: 20,
+    attribution: '&copy; OSM &copy; CARTO', maxNativeZoom: 20,
   },
   osm: {
     // OpenStreetMap standard — nomenclature complète, rendu de référence.
-    // detectRetina (option globale) rend le texte net sur écrans HiDPI.
     url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attribution: '&copy; OpenStreetMap', maxZoom: 19,
+    attribution: '&copy; OpenStreetMap', maxNativeZoom: 19,
   },
   hot: {
     // Style Humanitaire (HOT, rendu OSM France) — même donnée OSM vivante
     // que « Plan », mais conçu pour les villes africaines : bâtiments,
     // pistes et quartiers systématiquement dessinés (ajouté 2026-07-16).
     url: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
-    attribution: '&copy; OpenStreetMap &middot; HOT', maxZoom: 20,
+    attribution: '&copy; OpenStreetMap &middot; HOT', maxNativeZoom: 20,
   },
   topo: {
     // Esri World Topo (remplace OpenTopoMap le 2026-07-15 : cartographie
     // datée en Afrique de l'Ouest, zoom bridé à 17, tuiles lentes).
     url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
-    attribution: 'Tiles &copy; Esri', maxZoom: 19,
+    attribution: 'Tiles &copy; Esri', maxNativeZoom: 19,
   },
   satellite: {
-    // maxNativeZoom + maxZoom : au-delà du zoom natif Esri, les tuiles
-    // sont agrandies au lieu de disparaître (sur-zoom propre).
     url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    attribution: 'Tiles &copy; Esri', maxNativeZoom: 19, maxZoom: 20,
+    attribution: 'Tiles &copy; Esri', maxNativeZoom: 19,
   },
   relief: {
     // Relief ombré Esri en FOND (analyse topographique) — distinct de la
     // couche « Relief ombré » superposable des Paramètres → Couches.
     url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}',
-    attribution: 'Tiles &copy; Esri', maxZoom: 16,
+    attribution: 'Tiles &copy; Esri', maxNativeZoom: 16,
   },
   // 'gee' : fond Sentinel-2 servi par Google Earth Engine — asynchrone
   // (URL de tuiles obtenue via /api/gee/basemap/), géré à part dans
   // _applyTileStyle.
 };
 
+/* `detectRetina` est délibérément absent.
+   Sur écran HiDPI, Leaflet 1.9 lui fait diviser tileSize par 2, incrémenter
+   zoomOffset ET retrancher 1 à maxZoom — soit 4× plus de tuiles ET un niveau
+   de zoom perdu. Deux effets indésirables ici :
+     - CARTO paierait deux fois : `{r}` (rempli dès que l'écran est HiDPI,
+       indépendamment de detectRetina) sert déjà des tuiles @2x ;
+     - OSM/HOT/Esri ne publient pas de tuiles @2x — on téléchargerait 4× le
+       volume pour la même donnée source, coûteux sur réseau contraint.
+   Résultat : tuiles @2x natives là où le fournisseur les propose, 1× ailleurs,
+   et le zoom max reste celui annoncé. */
 function _buildTileLayer(style) {
   var def = _TILE_DEFS[style] || _TILE_DEFS.light;
-  var opts = {
-    attribution: def.attribution, maxZoom: def.maxZoom, detectRetina: true,
+  return L.tileLayer(def.url, {
+    attribution: def.attribution,
+    maxNativeZoom: def.maxNativeZoom,
+    maxZoom: _TILE_MAX_ZOOM,
     className: 'gd-basemap',   // léger assourdissement (cf. CSS)
-  };
-  if (def.maxNativeZoom) opts.maxNativeZoom = def.maxNativeZoom;
-  return L.tileLayer(def.url, opts);
+  });
 }
 
 let _labelsLayer = null;   // toponymie par-dessus les fonds imagerie (sans noms)
@@ -152,7 +168,7 @@ let _tileToken = 0;        // anti-course : seul le dernier choix de fond gagne
 function _addImageryLabels() {
   _labelsLayer = L.tileLayer(
     'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png',
-    { maxZoom: 20, opacity: 0.95 }
+    { maxNativeZoom: 20, maxZoom: _TILE_MAX_ZOOM, opacity: 0.95 }
   ).addTo(map);
 }
 
@@ -169,7 +185,7 @@ function _applyTileStyle(style) {
         if (token !== _tileToken || !map) return;   // fond changé entre-temps
         _tileLayer = L.tileLayer(cfg.imagery_tiles_url, {
           attribution: 'Sentinel-2 &copy; Copernicus · via Google Earth Engine',
-          maxNativeZoom: 15, maxZoom: 20, className: 'gd-basemap',
+          maxNativeZoom: 15, maxZoom: _TILE_MAX_ZOOM, className: 'gd-basemap',
         }).addTo(map);
         _tileLayer.bringToBack();
         _addImageryLabels();
